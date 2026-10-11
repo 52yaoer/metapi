@@ -14,6 +14,9 @@ describe('siteApiEndpointService', () => {
   let selectSiteApiEndpointTarget: SiteApiEndpointServiceModule['selectSiteApiEndpointTarget'];
   let recordSiteApiEndpointFailure: SiteApiEndpointServiceModule['recordSiteApiEndpointFailure'];
   let recordSiteApiEndpointSuccess: SiteApiEndpointServiceModule['recordSiteApiEndpointSuccess'];
+  let classifySiteApiEndpointFailure: SiteApiEndpointServiceModule['classifySiteApiEndpointFailure'];
+  let runWithSiteApiEndpointPool: SiteApiEndpointServiceModule['runWithSiteApiEndpointPool'];
+  let SiteApiEndpointRequestError: SiteApiEndpointServiceModule['SiteApiEndpointRequestError'];
   let dataDir = '';
 
   beforeAll(async () => {
@@ -29,6 +32,9 @@ describe('siteApiEndpointService', () => {
     selectSiteApiEndpointTarget = serviceModule.selectSiteApiEndpointTarget;
     recordSiteApiEndpointFailure = serviceModule.recordSiteApiEndpointFailure;
     recordSiteApiEndpointSuccess = serviceModule.recordSiteApiEndpointSuccess;
+    classifySiteApiEndpointFailure = serviceModule.classifySiteApiEndpointFailure;
+    runWithSiteApiEndpointPool = serviceModule.runWithSiteApiEndpointPool;
+    SiteApiEndpointRequestError = serviceModule.SiteApiEndpointRequestError;
   });
 
   beforeEach(async () => {
@@ -57,6 +63,17 @@ describe('siteApiEndpointService', () => {
       endpointId: null,
       baseUrl: 'https://panel.example.com',
       configuredEndpointCount: 0,
+    });
+  });
+
+  it('does not rotate or cool down an endpoint for an upstream context limit failure', () => {
+    const error = new SiteApiEndpointRequestError('The request exceeds the model context limit. Shorten the input and retry.', {
+      status: 502,
+      upstreamResponse: true,
+    });
+    expect(classifySiteApiEndpointFailure({ status: 502, error })).toMatchObject({
+      retryable: false,
+      rotateToNextEndpoint: false,
     });
   });
 
@@ -307,6 +324,44 @@ describe('siteApiEndpointService', () => {
       lastFailedAt: '2026-03-31T12:00:00.000Z',
       lastFailureReason: 'HTTP 401: Invalid token',
     });
+  });
+
+  it.each([429, 503])('does not cool a shared endpoint after an upstream HTTP %s response', async (status) => {
+    const site = await db.insert(schema.sites).values({
+      name: `shared-upstream-${status}-site`,
+      url: 'https://panel.example.com',
+      platform: 'sub2api',
+      status: 'active',
+    }).returning().get();
+
+    const endpoint = await db.insert(schema.siteApiEndpoints).values({
+      siteId: site.id,
+      url: 'https://api-shared.example.com',
+      enabled: true,
+      sortOrder: 0,
+    }).returning().get();
+
+    const upstreamFailure = new SiteApiEndpointRequestError(`HTTP ${status}: upstream response`, {
+      status,
+      upstreamResponse: true,
+    });
+
+    await expect(runWithSiteApiEndpointPool(site, async () => {
+      throw upstreamFailure;
+    })).rejects.toBe(upstreamFailure);
+
+    const storedAfterFailure = await db.select().from(schema.siteApiEndpoints)
+      .where(eq(schema.siteApiEndpoints.id, endpoint.id))
+      .get();
+    expect(storedAfterFailure).toMatchObject({
+      cooldownUntil: null,
+      lastFailureReason: `HTTP ${status}: upstream response`,
+    });
+
+    const secondResult = await runWithSiteApiEndpointPool(site, async (target) => ({
+      endpointId: target.endpointId,
+    }));
+    expect(secondResult).toEqual({ endpointId: endpoint.id });
   });
 
   it('clears cooldown metadata and updates lastSelectedAt after a recorded success', async () => {

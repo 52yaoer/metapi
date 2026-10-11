@@ -1,7 +1,7 @@
 import { fetch } from 'undici';
 import { schema } from '../db/index.js';
 import { withSiteRecordProxyRequestInit } from './siteProxy.js';
-import { runWithSiteApiEndpointPool } from './siteApiEndpointService.js';
+import { runWithSiteApiEndpointPool, SiteApiEndpointRequestError } from './siteApiEndpointService.js';
 import { getOauthInfoFromAccount } from './oauth/oauthAccount.js';
 import { CLAUDE_DEFAULT_ANTHROPIC_VERSION } from './oauth/claudeProvider.js';
 import {
@@ -144,7 +144,14 @@ export async function discoverCodexModelsFromCloud(input: {
     );
     if (!response.ok) {
       const text = await response.text().catch(() => '');
-      throw new Error(`HTTP ${response.status}: ${text || 'codex model discovery failed'}`);
+      throw new SiteApiEndpointRequestError(
+        `HTTP ${response.status}: ${text || 'codex model discovery failed'}`,
+        {
+          status: response.status,
+          rawErrText: text || null,
+          upstreamResponse: true,
+        },
+      );
     }
     return response.json();
   });
@@ -173,7 +180,14 @@ export async function discoverClaudeModelsFromCloud(input: {
     );
     if (!response.ok) {
       const text = await response.text().catch(() => '');
-      throw new Error(`HTTP ${response.status}: ${text || 'claude oauth model discovery failed'}`);
+      throw new SiteApiEndpointRequestError(
+        `HTTP ${response.status}: ${text || 'claude oauth model discovery failed'}`,
+        {
+          status: response.status,
+          rawErrText: text || null,
+          upstreamResponse: true,
+        },
+      );
     }
     return response.json();
   });
@@ -229,6 +243,7 @@ export async function discoverAntigravityModelsFromCloud(input: {
   const requestBody = projectId ? { project: projectId } : {};
   return runWithSiteApiEndpointPool(input.site, async (target) => {
     let lastError = '';
+    let lastUpstreamFailure: { status: number; rawErrText: string } | null = null;
     const selectedBaseUrl = normalizeBaseUrl(target.baseUrl || ANTIGRAVITY_UPSTREAM_BASE_URL) || ANTIGRAVITY_UPSTREAM_BASE_URL;
     const discoveryBaseUrls = target.endpointId
       ? [selectedBaseUrl]
@@ -252,6 +267,10 @@ export async function discoverAntigravityModelsFromCloud(input: {
         if (!response.ok) {
           const text = await response.text().catch(() => '');
           lastError = `HTTP ${response.status}: ${text || '未获取到可用模型'}`;
+          lastUpstreamFailure = {
+            status: response.status,
+            rawErrText: text,
+          };
           continue;
         }
 
@@ -266,6 +285,13 @@ export async function discoverAntigravityModelsFromCloud(input: {
       }
     }
 
+    if (lastUpstreamFailure) {
+      throw new SiteApiEndpointRequestError(lastError || '未获取到可用模型', {
+        status: lastUpstreamFailure.status,
+        rawErrText: lastUpstreamFailure.rawErrText || null,
+        upstreamResponse: true,
+      });
+    }
     throw new Error(lastError || '未获取到可用模型');
   });
 }

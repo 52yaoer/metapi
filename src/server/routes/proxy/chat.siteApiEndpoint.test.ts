@@ -147,7 +147,7 @@ describe('chat proxy site api endpoint rotation', () => {
     delete process.env.DATA_DIR;
   });
 
-  it('rotates to the next configured ai endpoint for retryable /v1/chat/completions failures', async () => {
+  it('rotates to the next configured ai endpoint without cooling it after an upstream /v1/chat/completions failure', async () => {
     const site = await db.insert(schema.sites).values({
       name: 'nihao-panel',
       url: 'https://console.example.com',
@@ -238,7 +238,7 @@ describe('chat proxy site api endpoint rotation', () => {
       url: 'https://api-a.example.com',
       lastFailureReason: 'HTTP 502: [upstream:/v1/messages] Upstream returned HTTP 502: bad gateway via messages',
     });
-    expect(storedEndpoints[0]?.cooldownUntil).toBeTruthy();
+    expect(storedEndpoints[0]?.cooldownUntil).toBeNull();
     expect(storedEndpoints[1]?.lastSelectedAt).toBeTruthy();
   });
 });

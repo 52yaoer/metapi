@@ -997,7 +997,7 @@ describe('refreshModelsForAccount credential discovery', () => {
     expect(String(undiciFetchMock.mock.calls[0]?.[0] || '')).toBe('https://chatgpt.com/backend-api/codex/models?client_version=1.0.0');
   });
 
-  it('rotates codex cloud discovery across configured ai endpoints after a retryable failure', async () => {
+  it('rotates codex cloud discovery across configured ai endpoints without cooling an upstream response failure', async () => {
     getApiTokenMock.mockResolvedValue(null);
     getModelsMock.mockRejectedValue(new Error('codex plan discovery should not call adapter.getModels'));
     undiciFetchMock
@@ -1074,7 +1074,7 @@ describe('refreshModelsForAccount credential discovery', () => {
       .all();
     const firstEndpoint = endpoints.find((item) => item.url === 'https://chatgpt.com/backend-api/codex-a');
     const secondEndpoint = endpoints.find((item) => item.url === 'https://chatgpt.com/backend-api/codex-b');
-    expect(firstEndpoint?.cooldownUntil).toBeTruthy();
+    expect(firstEndpoint?.cooldownUntil).toBeNull();
     expect(firstEndpoint?.lastFailureReason).toContain('HTTP 502');
     expect(secondEndpoint?.lastSelectedAt).toBeTruthy();
   });
@@ -2214,7 +2214,7 @@ describe('refreshModelsForAccount credential discovery', () => {
     const endpoints = await db.select().from(schema.siteApiEndpoints).all();
     const firstEndpoint = endpoints.find((item) => item.url === 'https://api-antigravity-a.example.com');
     const secondEndpoint = endpoints.find((item) => item.url === 'https://api-antigravity-b.example.com');
-    expect(firstEndpoint?.cooldownUntil).toBeTruthy();
+    expect(firstEndpoint?.cooldownUntil).toBeNull();
     expect(firstEndpoint?.lastFailureReason).toContain('HTTP 503');
     expect(secondEndpoint?.lastSelectedAt).toBeTruthy();
   });

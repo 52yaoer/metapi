@@ -2,6 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { shouldAbortSameSiteEndpointFallback, shouldRetryProxyRequest } from './proxyRetryPolicy.js';
 
 describe('proxyRetryPolicy', () => {
+  it.each([400, 200, 502, 503])('does not retry context limit failures reported with HTTP %s', (status) => {
+    expect(shouldRetryProxyRequest(status, 'The request exceeds the model context limit. Shorten the input and retry.')).toBe(false);
+    expect(shouldRetryProxyRequest(status, '{"error":{"code":"context_length_exceeded"}}')).toBe(false);
+  });
+
   it('retries on rate limit and server errors', () => {
     expect(shouldRetryProxyRequest(429, 'rate limit')).toBe(true);
     expect(shouldRetryProxyRequest(500, 'internal error')).toBe(true);

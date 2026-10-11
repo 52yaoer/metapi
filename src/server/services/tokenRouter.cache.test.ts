@@ -154,6 +154,17 @@ describe('TokenRouter runtime cache', () => {
     const router = new TokenRouter();
 
     const firstStartedAt = Date.now();
+    await router.recordFailure(channel.id, {
+      status: 502,
+      errorText: 'The request exceeds the model context limit. Shorten the input and retry.',
+      modelName: 'gpt-4o-mini',
+    });
+    const contextFailureRecord = await db.select().from(schema.routeChannels)
+      .where(eq(schema.routeChannels.id, channel.id))
+      .get();
+    expect(contextFailureRecord?.failCount).toBe(0);
+    expect(contextFailureRecord?.cooldownUntil).toBeNull();
+    expect(isChannelRecentlyFailed(channel.id)).toBe(false);
     await router.recordFailure(channel.id);
     const firstRecord = await db.select().from(schema.routeChannels)
       .where(eq(schema.routeChannels.id, channel.id))

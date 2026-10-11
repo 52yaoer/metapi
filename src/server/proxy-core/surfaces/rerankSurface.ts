@@ -103,8 +103,8 @@ export async function handleRerankSurfaceRequest(
         const failure = new SiteApiEndpointRequestError(result.errText || 'unknown error', {
           status: result.status || 502,
           rawErrText: result.rawErrText || result.errText || 'unknown error',
-        }) as SiteApiEndpointRequestError & { siteApiEndpointUpstreamFailure?: boolean };
-        failure.siteApiEndpointUpstreamFailure = true;
+          upstreamResponse: true,
+        });
         throw failure;
       });
 

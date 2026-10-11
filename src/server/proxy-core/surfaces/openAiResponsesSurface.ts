@@ -854,8 +854,8 @@ export async function handleOpenAiResponsesSurfaceRequest(
             const upstreamFailure = new SiteApiEndpointRequestError(result.errText || 'unknown error', {
               status: result.status || 502,
               rawErrText: result.rawErrText || result.errText || 'unknown error',
-            }) as SiteApiEndpointRequestError & { siteApiEndpointUpstreamFailure?: boolean };
-            upstreamFailure.siteApiEndpointUpstreamFailure = true;
+              upstreamResponse: true,
+            });
             throw upstreamFailure;
           }
           return result;

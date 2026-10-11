@@ -1,7 +1,7 @@
 import { asc, eq } from 'drizzle-orm';
 import { Headers, Response } from 'undici';
 import { db, schema } from '../db/index.js';
-import { RETRYABLE_TIMEOUT_PATTERNS } from './proxyRetryPolicy.js';
+import { isContextLimitFailure, RETRYABLE_TIMEOUT_PATTERNS } from './proxyRetryPolicy.js';
 import { proxyChannelCoordinator, type ProxySiteLease } from './proxyChannelCoordinator.js';
 import { copyObservedResponseMeta } from '../proxy-core/firstByteTimeout.js';
 
@@ -54,12 +54,14 @@ export class SiteApiEndpointRequestError extends Error {
   readonly rawErrText: string | null;
   readonly firstByteLatencyMs: number | null;
   readonly siteConcurrencyTimeout: boolean;
+  readonly siteApiEndpointUpstreamFailure: boolean;
 
   constructor(message: string, options?: {
     status?: number | null;
     rawErrText?: string | null;
     firstByteLatencyMs?: number | null;
     siteConcurrencyTimeout?: boolean;
+    upstreamResponse?: boolean;
     cause?: unknown;
   }) {
     super(message, options?.cause !== undefined ? { cause: options.cause } : undefined);
@@ -72,6 +74,7 @@ export class SiteApiEndpointRequestError extends Error {
       ? options.firstByteLatencyMs
       : null;
     this.siteConcurrencyTimeout = options?.siteConcurrencyTimeout === true;
+    this.siteApiEndpointUpstreamFailure = options?.upstreamResponse === true;
   }
 }
 
@@ -237,6 +240,12 @@ function parseStatusFromFailureMessage(message: string): number | null {
   return Number.isFinite(status) ? status : null;
 }
 
+function isUpstreamResponseFailure(input: SiteApiEndpointFailureInput): boolean {
+  return !!input.error
+    && typeof input.error === 'object'
+    && (input.error as { siteApiEndpointUpstreamFailure?: unknown }).siteApiEndpointUpstreamFailure === true;
+}
+
 export function classifySiteApiEndpointFailure(
   input: SiteApiEndpointFailureInput,
 ): SiteApiEndpointFailureDisposition {
@@ -245,6 +254,14 @@ export function classifySiteApiEndpointFailure(
     ? input.status
     : parseStatusFromFailureMessage(message);
   const failureReason = formatFailureReason(status, message);
+
+  if (isContextLimitFailure(message)) {
+    return { retryable: false, rotateToNextEndpoint: false, failureReason };
+  }
+
+  if (isUpstreamResponseFailure(input)) {
+    return { retryable: false, rotateToNextEndpoint: true, failureReason };
+  }
 
   if (status !== null) {
     if (RETRYABLE_STATUS_CODES.has(status)) {
@@ -265,8 +282,10 @@ export function classifySiteApiEndpointFailure(
 export async function selectSiteApiEndpointTarget(
   site: SiteRow,
   now?: string | Date,
+  options?: { excludedEndpointIds?: ReadonlySet<number> },
 ): Promise<SiteApiEndpointTarget | null> {
   const nowIso = toIsoTimestamp(now);
+  const excludedEndpointIds = options?.excludedEndpointIds;
   const endpoints = await db.select().from(schema.siteApiEndpoints)
     .where(eq(schema.siteApiEndpoints.siteId, site.id))
     .orderBy(asc(schema.siteApiEndpoints.sortOrder), asc(schema.siteApiEndpoints.id))
@@ -284,7 +303,11 @@ export async function selectSiteApiEndpointTarget(
   }
 
   const eligible = endpoints
-    .filter((endpoint) => (endpoint.enabled ?? true) && !isEndpointCoolingDown(endpoint, nowIso))
+    .filter((endpoint) => (
+      (endpoint.enabled ?? true)
+      && !isEndpointCoolingDown(endpoint, nowIso)
+      && !excludedEndpointIds?.has(endpoint.id)
+    ))
     .sort((left, right) => {
       const sortOrder = (left.sortOrder ?? 0) - (right.sortOrder ?? 0);
       if (sortOrder !== 0) return sortOrder;
@@ -381,7 +404,9 @@ export async function runWithSiteApiEndpointPool<T>(
 
   try {
     while (true) {
-      const target = await selectSiteApiEndpointTarget(site);
+      const target = await selectSiteApiEndpointTarget(site, undefined, {
+        excludedEndpointIds: attemptedEndpointIds,
+      });
       if (!target) {
         if (lastError) throw lastError;
         throw new Error('当前站点的 API 请求地址均不可用');

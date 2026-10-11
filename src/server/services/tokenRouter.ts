@@ -8,7 +8,7 @@ import {
 } from '../config.js';
 import { getCachedModelRoutingReferenceCost, refreshModelPricingCatalog } from './modelPricingService.js';
 import { proxyChannelCoordinator, type ProxyChannelLoadSnapshot } from './proxyChannelCoordinator.js';
-import { RETRYABLE_TIMEOUT_PATTERNS } from './proxyRetryPolicy.js';
+import { isContextLimitFailure, RETRYABLE_TIMEOUT_PATTERNS } from './proxyRetryPolicy.js';
 import {
   normalizeRouteRoutingStrategy,
   type RouteRoutingStrategy,
@@ -2657,6 +2657,7 @@ export class TokenRouter {
     context: SiteRuntimeFailureContext | string | null = {},
     actualAccountId?: number,
   ) {
+    if (typeof context === 'object' && isContextLimitFailure(context?.errorText)) return;
     await ensureSiteRuntimeHealthStateLoaded();
     const row = await db.select()
       .from(schema.routeChannels)

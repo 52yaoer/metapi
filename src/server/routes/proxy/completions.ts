@@ -105,6 +105,7 @@ export async function completionsProxyRoute(app: FastifyInstance) {
               status: response.status,
               rawErrText: errText || null,
               firstByteLatencyMs: observedFirstByteLatencyMs,
+              upstreamResponse: true,
             });
           }
           return {

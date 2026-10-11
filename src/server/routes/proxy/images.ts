@@ -100,6 +100,7 @@ export async function imagesProxyRoute(app: FastifyInstance) {
               status: response.status,
               rawErrText: responseText || null,
               firstByteLatencyMs: observedFirstByteLatencyMs,
+              upstreamResponse: true,
             });
           }
           return {
@@ -320,6 +321,7 @@ export async function imagesProxyRoute(app: FastifyInstance) {
               status: response.status,
               rawErrText: responseText || null,
               firstByteLatencyMs: observedFirstByteLatencyMs,
+              upstreamResponse: true,
             });
           }
           return {

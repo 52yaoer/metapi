@@ -718,8 +718,8 @@ export async function handleChatSurfaceRequest(
           const upstreamFailure = new SiteApiEndpointRequestError(result.errText || 'unknown error', {
             status: result.status || 502,
             rawErrText: result.rawErrText || result.errText || 'unknown error',
-          }) as SiteApiEndpointRequestError & { siteApiEndpointUpstreamFailure?: boolean };
-          upstreamFailure.siteApiEndpointUpstreamFailure = true;
+            upstreamResponse: true,
+          });
           throw upstreamFailure;
         }
         return result;
@@ -1644,6 +1644,7 @@ export async function handleClaudeCountTokensSurfaceRequest(
           throw new SiteApiEndpointRequestError(errText || 'unknown error', {
             status: upstream.status,
             rawErrText: typeof payload === 'string' ? payload : text,
+            upstreamResponse: true,
           });
         }
         return {

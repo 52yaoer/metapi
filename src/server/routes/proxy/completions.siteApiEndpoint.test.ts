@@ -125,7 +125,7 @@ describe('/v1/completions site api endpoint rotation', () => {
     delete process.env.DATA_DIR;
   });
 
-  it('cools down a retryable failed endpoint and retries the next endpoint within the same site', async () => {
+  it('rotates to the next configured endpoint without cooling it after an upstream failure', async () => {
     const site = await db.insert(schema.sites).values({
       name: 'nihao-panel',
       url: 'https://console.example.com',
@@ -216,7 +216,7 @@ describe('/v1/completions site api endpoint rotation', () => {
       url: 'https://api-a.example.com',
       lastFailureReason: 'HTTP 502: bad gateway',
     });
-    expect(storedEndpoints[0]?.cooldownUntil).toBeTruthy();
+    expect(storedEndpoints[0]?.cooldownUntil).toBeNull();
     expect(storedEndpoints[1]).toMatchObject({
       url: 'https://api-b.example.com',
     });

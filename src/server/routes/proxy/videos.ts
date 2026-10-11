@@ -116,6 +116,7 @@ export async function videosProxyRoute(app: FastifyInstance) {
             throw new SiteApiEndpointRequestError(responseText || 'unknown error', {
               status: response.status,
               rawErrText: responseText || null,
+              upstreamResponse: true,
             });
           }
           return {
@@ -277,6 +278,7 @@ async function requestMappedVideoTaskUpstream(
         throw new SiteApiEndpointRequestError(errorText || `HTTP ${upstream.status}`, {
           status: upstream.status,
           rawErrText: errorText || null,
+          upstreamResponse: true,
         });
       }
     }

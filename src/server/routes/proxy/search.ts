@@ -132,6 +132,7 @@ export async function searchProxyRoute(app: FastifyInstance) {
               status: response.status,
               rawErrText: responseText || null,
               firstByteLatencyMs: observedFirstByteLatencyMs,
+              upstreamResponse: true,
             });
           }
           return {

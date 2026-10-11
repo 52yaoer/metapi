@@ -102,6 +102,7 @@ export async function embeddingsProxyRoute(app: FastifyInstance) {
               throw new SiteApiEndpointRequestError('unknown error', {
                 status,
                 firstByteLatencyMs: observedFirstByteLatencyMs,
+                upstreamResponse: true,
                 cause: error,
               });
             }
@@ -112,6 +113,7 @@ export async function embeddingsProxyRoute(app: FastifyInstance) {
               status,
               rawErrText: responseText || null,
               firstByteLatencyMs: observedFirstByteLatencyMs,
+              upstreamResponse: true,
             });
           }
           return {
