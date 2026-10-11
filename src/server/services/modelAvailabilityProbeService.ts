@@ -4,6 +4,7 @@ import { db, schema } from '../db/index.js';
 import { startBackgroundTask } from './backgroundTaskService.js';
 import { isUsableAccountToken, ACCOUNT_TOKEN_VALUE_STATUS_READY } from './accountTokenService.js';
 import { probeRuntimeModel } from './runtimeModelProbe.js';
+import { runSerializedSiteUpstreamOperation } from './siteUpstreamOperationQueue.js';
 import * as routeRefreshWorkflow from './routeRefreshWorkflow.js';
 
 type ProbeStatus = 'supported' | 'unsupported' | 'inconclusive' | 'skipped';
@@ -94,13 +95,13 @@ async function probeSingleTarget(target: ProbeTarget): Promise<{
   latencyMs: number | null;
   reason: string;
 }> {
-  return await probeRuntimeModel({
+  return await runSerializedSiteUpstreamOperation(target.site.id, target.account.id, () => probeRuntimeModel({
     site: target.site,
     account: target.account,
     modelName: target.modelName,
     timeoutMs: config.modelAvailabilityProbeTimeoutMs,
     tokenValue: target.kind === 'token' ? target.tokenValue : undefined,
-  });
+  }));
 }
 
 async function updateProbeRow(target: ProbeTarget, status: ProbeStatus, latencyMs: number | null): Promise<{

@@ -658,11 +658,11 @@ export default function Sites() {
               : d.status === 'unsupported'
                 ? (d.latencyExceeded ? `✗ 延迟超限 (${d.latencyMs}ms)` : '✗ 不可用')
               : d.status === 'skipped' ? '— 已跳过'
-              : '✗ 不可用';
+              : '？ 结果不确定';
             const lat = d.latencyMs != null && d.status !== 'skipped' ? ` (${d.latencyMs}ms)` : '';
             const c = d.status === 'supported' ? 'var(--color-success, #22c55e)'
-              : d.status === 'skipped' ? 'var(--color-text-muted)'
-              : 'var(--color-error, #ef4444)';
+              : d.status === 'unsupported' ? 'var(--color-error, #ef4444)'
+              : 'var(--color-text-muted)';
             const reasonText = (() => {
               if (!d.reason || d.status === 'supported' || d.status === 'skipped') return '';
               const r = d.reason;
@@ -676,17 +676,21 @@ export default function Sites() {
               if (/响应延迟/.test(r)) return r;
               return r.length > 60 ? r.slice(0, 57) + '…' : r;
             })();
-            addLog(`${s}${lat}  ${d.modelName}${reasonText ? `  —  ${reasonText}` : ''}`, c);
+            const accountText = d.accountId ? `账号 #${d.accountId}  ` : '';
+            addLog(`${s}${lat}  ${accountText}${d.modelName}${reasonText ? `  —  ${reasonText}` : ''}`, c);
             setTimeout(() => probeLogEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 30);
           } else if (type === 'action') {
             if (d.action === 'disabled') addLog(`  ↳ 已加入站点禁用列表: ${d.modelName}`, 'var(--color-text-muted)');
           } else if (type === 'complete') {
-            if (d.unsupported > 0) {
-              addLog(`完成：${d.probed} 个模型已探测，${d.unsupported} 个不可用已自动加入禁用列表`, 'var(--color-error, #ef4444)');
-              toast.error(`${d.unsupported} 个模型不可用，已自动加入站点禁用列表`);
+            if (d.disabled > 0) {
+              addLog(`完成：${d.probed} 个账号模型已探测，${d.disabled} 个模型已加入站点禁用列表`, 'var(--color-error, #ef4444)');
+              toast.error(`${d.disabled} 个模型已加入站点禁用列表`);
+            } else if (d.unsupported > 0 || d.inconclusive > 0) {
+              addLog(`完成：${d.probed} 个账号模型已探测，明确不可用 ${d.unsupported}，结果不确定 ${d.inconclusive}，已保留其他账号状态`, 'var(--color-text-muted)');
+              toast.info(`探测完成：明确不可用 ${d.unsupported}，结果不确定 ${d.inconclusive}，未执行站点级禁用`);
             } else {
-              addLog(`完成：${d.probed} 个模型均可用`, 'var(--color-success, #22c55e)');
-              toast.success(`探测完成：${d.probed} 个模型均可用`);
+              addLog(`完成：${d.probed} 个账号模型均可用`, 'var(--color-success, #22c55e)');
+              toast.success(`探测完成：${d.probed} 个账号模型均可用`);
             }
             setTimeout(() => probeLogEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 30);
             // Refresh model lists to reflect probe results
