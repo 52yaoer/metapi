@@ -155,6 +155,11 @@ describe('TokenRouter runtime cache', () => {
 
     const firstStartedAt = Date.now();
     await router.recordFailure(channel.id, {
+      status: 422,
+      errorText: 'Failed to deserialize the JSON body: messages[45]: unknown variant `web_search_call`',
+      modelName: 'gpt-4o-mini',
+    });
+    await router.recordFailure(channel.id, {
       status: 502,
       errorText: 'The request exceeds the model context limit. Shorten the input and retry.',
       modelName: 'gpt-4o-mini',
@@ -164,7 +169,7 @@ describe('TokenRouter runtime cache', () => {
       .get();
     expect(contextFailureRecord?.failCount).toBe(0);
     expect(contextFailureRecord?.cooldownUntil).toBeNull();
-    expect(isChannelRecentlyFailed(channel.id)).toBe(false);
+    expect(isChannelRecentlyFailed(contextFailureRecord!)).toBe(false);
     await router.recordFailure(channel.id);
     const firstRecord = await db.select().from(schema.routeChannels)
       .where(eq(schema.routeChannels.id, channel.id))

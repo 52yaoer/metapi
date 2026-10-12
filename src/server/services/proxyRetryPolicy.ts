@@ -1,3 +1,7 @@
+import { isContextLimitFailure, isRequestValidationError } from '../transformers/shared/endpointCompatibility.js';
+
+export { isContextLimitFailure };
+
 const MODEL_UNSUPPORTED_PATTERNS: RegExp[] = [
   /当前\s*api\s*不支持所选模型/i,
   /不支持所选模型/i,
@@ -84,12 +88,13 @@ function matchesAnyPattern(patterns: RegExp[], rawMessage?: string | null): bool
   return patterns.some((pattern) => pattern.test(text));
 }
 
-export function isContextLimitFailure(upstreamErrorText?: string | null): boolean {
-  return /context_length_exceeded|\bexceeds\s+the\s+model\s+context\s+limit\b|\bmaximum\s+context\s+length\b|\bcontext\s+(?:length|window|limit)\s+(?:exceeded|exceeds)\b/i.test(upstreamErrorText || '');
+export function isProxyRequestFailure(status?: number | null, upstreamErrorText?: string | null): boolean {
+  return isContextLimitFailure(upstreamErrorText)
+    || (!isModelUnsupportedErrorMessage(upstreamErrorText) && isRequestValidationError(status ?? 0, upstreamErrorText));
 }
 
 export function shouldRetryProxyRequest(status: number, upstreamErrorText?: string | null): boolean {
-  if (isContextLimitFailure(upstreamErrorText)) return false;
+  if (isProxyRequestFailure(status, upstreamErrorText)) return false;
   if (status >= 500) return true;
   if (status === 408 || status === 409 || status === 425 || status === 429) return true;
   if (status === 401 || status === 403) return true;
@@ -101,7 +106,7 @@ export function shouldRetryProxyRequest(status: number, upstreamErrorText?: stri
 }
 
 export function shouldAbortSameSiteEndpointFallback(status: number, upstreamErrorText?: string | null): boolean {
-  if (isContextLimitFailure(upstreamErrorText)) return true;
+  if (isProxyRequestFailure(status, upstreamErrorText)) return true;
   if (status < 500 && status !== 408 && status !== 429) {
     return false;
   }

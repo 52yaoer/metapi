@@ -7,7 +7,7 @@ vi.mock('./modelPricingService.js', () => ({
 }));
 
 import { resolveUpstreamEndpointCandidates } from './upstreamEndpointDerivation.js';
-import { resetUpstreamEndpointRuntimeState } from './upstreamEndpointRuntimeMemory.js';
+import { recordUpstreamEndpointFailure, resetUpstreamEndpointRuntimeState } from './upstreamEndpointRuntimeMemory.js';
 
 const baseContext = {
   site: {
@@ -24,6 +24,20 @@ const baseContext = {
 };
 
 describe('upstreamEndpointDerivation', () => {
+  it('does not learn protocol blocks or prefer messages from request validation failures', async () => {
+    const errorText = JSON.stringify({ error: { type: 'invalid_request_error', message: 'Failed to deserialize messages[45]: unknown variant `web_search_call`' } });
+    const memoryWrite = recordUpstreamEndpointFailure({
+      siteId: baseContext.site.id,
+      endpoint: 'chat',
+      downstreamFormat: 'responses',
+      modelName: 'deepseek-flash',
+      status: 422,
+      errorText,
+    });
+    expect(memoryWrite).toBeNull();
+    expect(await resolveUpstreamEndpointCandidates(baseContext, 'deepseek-flash', 'responses')).toEqual(['responses', 'chat', 'messages']);
+  });
+
   beforeEach(() => {
     fetchModelPricingCatalogMock.mockReset();
     fetchModelPricingCatalogMock.mockResolvedValue(null);

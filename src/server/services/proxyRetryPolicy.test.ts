@@ -2,6 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { shouldAbortSameSiteEndpointFallback, shouldRetryProxyRequest } from './proxyRetryPolicy.js';
 
 describe('proxyRetryPolicy', () => {
+  it.each([400, 422, 502])('does not retry tool history validation errors wrapped as HTTP %s', (status) => {
+    const text = '{"error":{"type":"invalid_request_error","message":"No tool call found for tool output with call_id call_2."}}';
+    expect(shouldRetryProxyRequest(status, text)).toBe(false);
+    expect(shouldAbortSameSiteEndpointFallback(status, text)).toBe(true);
+  });
+
   it.each([400, 200, 502, 503])('does not retry context limit failures reported with HTTP %s', (status) => {
     expect(shouldRetryProxyRequest(status, 'The request exceeds the model context limit. Shorten the input and retry.')).toBe(false);
     expect(shouldRetryProxyRequest(status, '{"error":{"code":"context_length_exceeded"}}')).toBe(false);

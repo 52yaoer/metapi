@@ -20,6 +20,34 @@ import {
 } from './conversion.js';
 
 describe('responses conversion single source of truth', () => {
+  it.each([
+    ['input_image', 'https://example.com/image.png'],
+    ['image_url', { url: 'https://example.com/image.png', detail: 'high' }],
+  ])('normalizes %s blocks into chat image objects', (type, imageUrl) => {
+    const converted = convertResponsesBodyToOpenAiBody({
+      model: 'deepseek-flash',
+      input: [{ role: 'user', content: [{ type, image_url: imageUrl, detail: 'high' }] }],
+    }, 'deepseek-flash', false);
+    expect(converted.messages).toEqual([{
+      role: 'user',
+      content: [{ type: 'image_url', image_url: { url: 'https://example.com/image.png', detail: 'high' } }],
+    }]);
+  });
+
+  it('converts native web search history into chat text instead of an unknown content variant', () => {
+    const converted = convertResponsesBodyToOpenAiBody({
+      model: 'deepseek-flash',
+      input: [
+        { type: 'web_search_call', id: 'search_1', status: 'completed', action: { type: 'search', query: 'weather in Shanghai' } },
+        { role: 'user', content: [{ type: 'input_text', text: 'Summarize the result' }] },
+      ],
+    }, 'deepseek-flash', false);
+    const messages = converted.messages as Array<{ role: string; content: unknown }>;
+    expect(messages[0]?.role).toBe('assistant');
+    expect(JSON.stringify(messages[0]?.content)).toContain('weather in Shanghai');
+    expect(JSON.stringify(messages)).not.toContain('"type":"web_search_call"');
+  });
+
   it('exports shared conversion helpers from one implementation', () => {
     expect(normalizeResponsesInputForCompatibilityViaCompatibility).toBe(normalizeResponsesInputForCompatibility);
     expect(
@@ -882,7 +910,7 @@ describe('convertOpenAiBodyToResponsesBody', () => {
           },
           {
             type: 'image_url',
-            image_url: 'https://example.com/tool.png',
+            image_url: { url: 'https://example.com/tool.png' },
           },
         ],
       },

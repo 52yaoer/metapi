@@ -1,7 +1,7 @@
 import { asc, eq } from 'drizzle-orm';
 import { Headers, Response } from 'undici';
 import { db, schema } from '../db/index.js';
-import { isContextLimitFailure, RETRYABLE_TIMEOUT_PATTERNS } from './proxyRetryPolicy.js';
+import { isProxyRequestFailure, RETRYABLE_TIMEOUT_PATTERNS } from './proxyRetryPolicy.js';
 import { proxyChannelCoordinator, type ProxySiteLease } from './proxyChannelCoordinator.js';
 import { copyObservedResponseMeta } from '../proxy-core/firstByteTimeout.js';
 
@@ -255,7 +255,7 @@ export function classifySiteApiEndpointFailure(
     : parseStatusFromFailureMessage(message);
   const failureReason = formatFailureReason(status, message);
 
-  if (isContextLimitFailure(message)) {
+  if (isProxyRequestFailure(status, message)) {
     return { retryable: false, rotateToNextEndpoint: false, failureReason };
   }
 

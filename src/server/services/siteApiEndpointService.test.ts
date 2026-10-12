@@ -47,6 +47,14 @@ describe('siteApiEndpointService', () => {
     delete process.env.DATA_DIR;
   });
 
+  it('does not rotate API addresses for upstream request validation errors', () => {
+    const error = new SiteApiEndpointRequestError('No tool call found for tool output with call_id call_2.', {
+      status: 400,
+      upstreamResponse: true,
+    });
+    expect(classifySiteApiEndpointFailure({ status: 400, error })).toMatchObject({ retryable: false, rotateToNextEndpoint: false });
+  });
+
   it('returns a synthetic site-url fallback when the site has no configured api endpoints', async () => {
     const site = await db.insert(schema.sites).values({
       name: 'panel-only-site',

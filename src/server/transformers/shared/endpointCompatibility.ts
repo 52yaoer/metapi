@@ -10,6 +10,18 @@ type ParsedEndpointErrorShape = {
   type: string;
 };
 
+const REQUEST_VALIDATION_PATTERNS: RegExp[] = [
+  /no\s+tool\s+call\s+found\s+for\s+tool\s+output/i,
+  /failed\s+to\s+deserialize/i,
+  /messages\[\d+\].*(?:unknown\s+variant|invalid\s+type)/i,
+  /reasoning_content.*must\s+be\s+passed\s+back/i,
+  /invalid\s+request\s+body/i,
+  /invalid\s+json/i,
+  /missing\s+required/i,
+  /unknown\s+parameter/i,
+  /unrecognized\s+(?:field|key|parameter)/i,
+];
+
 type PreferResponsesAfterLegacyChatErrorInput = {
   status: number;
   upstreamErrorText?: string | null;
@@ -198,6 +210,20 @@ export function hasEndpointMismatchHint(upstreamErrorText?: string | null): bool
   )) || inferSuggestedEndpointFromUpstreamError(upstreamErrorText) !== null;
 }
 
+export function isContextLimitFailure(upstreamErrorText?: string | null): boolean {
+  return /context_length_exceeded|\bexceeds\s+the\s+model\s+context\s+limit\b|\bmaximum\s+context\s+length\b|\bcontext\s+(?:length|window|limit)\s+(?:exceeded|exceeds)\b/i.test(upstreamErrorText || '');
+}
+
+export function isRequestValidationError(status: number, upstreamErrorText?: string | null): boolean {
+  if (status < 400) return false;
+  if (isContextLimitFailure(upstreamErrorText)) return true;
+  if (REQUEST_VALIDATION_PATTERNS.some((pattern) => pattern.test(upstreamErrorText || ''))) return true;
+  const parsed = parseEndpointErrorShape(upstreamErrorText);
+  return (status === 400 || status === 422)
+    && parsed.type === 'invalid_request_error'
+    && !hasEndpointMismatchHint(upstreamErrorText);
+}
+
 export function promoteRequiredEndpointCandidateAfterProtocolError(
   endpointCandidates: CompatibilityEndpoint[],
   input: {
@@ -259,6 +285,7 @@ export function promoteResponsesCandidateAfterLegacyChatError(
 
 export function isEndpointDowngradeError(status: number, upstreamErrorText?: string | null): boolean {
   if (status < 400) return false;
+  if (isRequestValidationError(status, upstreamErrorText)) return false;
   const parsed = parseEndpointErrorShape(upstreamErrorText);
   const text = parsed.text;
   if (status === 404 || status === 405 || status === 415 || status === 501) return true;
@@ -306,7 +333,7 @@ export function isEndpointDowngradeError(status: number, upstreamErrorText?: str
       && endpointMismatchHint
     )
     || parsed.type === 'not_found_error'
-    || parsed.type === 'invalid_request_error'
+    || (parsed.type === 'invalid_request_error' && endpointMismatchHint)
     || parsed.type === 'unsupported_endpoint'
     || parsed.type === 'unsupported_path'
     || parsed.type === 'bad_response_status_code'

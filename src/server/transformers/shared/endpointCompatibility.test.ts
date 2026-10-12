@@ -4,8 +4,27 @@ import {
   hasEndpointMismatchHint,
   inferRequiredEndpointFromProtocolError,
   inferSuggestedEndpointFromUpstreamError,
+  isEndpointDowngradeError,
   promoteRequiredEndpointCandidateAfterProtocolError,
 } from './endpointCompatibility.js';
+
+describe('request validation and protocol fallback', () => {
+  it.each([
+    [400, 'No tool call found for tool output with call_id call_2.'],
+    [422, 'Failed to deserialize the JSON body: messages[45]: unknown variant `web_search_call`'],
+    [422, 'messages[129]: invalid type: string, expected struct OpenAICompletionImageUrl'],
+    [400, 'The `reasoning_content` in the thinking mode must be passed back to the API.'],
+    [400, 'The request exceeds the model context limit. Shorten the input and retry.'],
+    [400, 'Temperature must be between 0 and 2.'],
+  ])('keeps HTTP %s request errors out of protocol downgrade', (status, message) => {
+    expect(isEndpointDowngradeError(status, JSON.stringify({ error: { message, type: 'invalid_request_error' } }))).toBe(false);
+  });
+
+  it('still downgrades explicit endpoint mismatch errors', () => {
+    expect(isEndpointDowngradeError(400, '{"error":{"type":"invalid_request_error","message":"Unsupported endpoint /v1/responses"}}')).toBe(true);
+    expect(isEndpointDowngradeError(404, '')).toBe(true);
+  });
+});
 
 describe('inferRequiredEndpointFromProtocolError', () => {
   it('recognizes messages-required protocol errors', () => {

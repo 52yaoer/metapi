@@ -836,13 +836,24 @@ function normalizeOpenAiContentBlock(item: Record<string, unknown>): string | Re
     return text ? { type: 'text', text } : null;
   }
 
-  if (type === 'input_image') {
+  if (type === 'input_image' || type === 'image_url') {
     const imageUrl = item.image_url ?? item.url;
-    if (imageUrl === undefined) return null;
+    const url = asTrimmedString(isRecord(imageUrl) ? imageUrl.url : imageUrl);
+    if (!url) return null;
+    const detail = asTrimmedString(item.detail);
     return {
       type: 'image_url',
-      image_url: imageUrl,
+      image_url: {
+        ...(isRecord(imageUrl) ? imageUrl : {}),
+        url,
+        ...(detail ? { detail } : {}),
+      },
     };
+  }
+
+  if (type === 'web_search_call') {
+    const text = extractTextContent(item) || safeJsonStringify(item.action ?? {});
+    return { type: 'text', text: `Web search: ${text}` };
   }
 
   if (type === 'input_audio' && item.input_audio !== undefined) {
@@ -1046,6 +1057,12 @@ export function convertResponsesBodyToOpenAiBody(
         message.reasoning_signature = reasoningSignature;
       }
       messages.push(message);
+      return;
+    }
+
+    if (itemType === 'web_search_call') {
+      flushPendingToolCalls();
+      messages.push({ role: 'assistant', content: toOpenAiMessageContent(item) });
       return;
     }
 
