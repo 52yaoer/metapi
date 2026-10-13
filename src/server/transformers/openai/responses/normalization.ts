@@ -237,6 +237,116 @@ function sanitizeResponsesInputToolLifecycle(items: unknown[]): unknown[] {
   return sanitized;
 }
 
+function responsesToolLifecycleCallId(item: Record<string, unknown>): string {
+  return asTrimmedString(item.call_id ?? item.id);
+}
+
+// Some Responses-compatible upstreams reject an input where a `function_call_output` is separated
+// from its `function_call` by other items (a `message` or `reasoning` in between), returning
+// "No tool output found for tool call ...". Pull each output up to immediately follow the call it
+// answers so the pair stays contiguous. Orphan outputs (continuation turns whose call lives in a
+// referenced previous response) have no local call and keep their original position.
+export function groupResponsesToolCallOutputs(input: unknown[]): unknown[] {
+  const outputsByCallId = new Map<string, unknown[]>();
+
+  for (const item of input) {
+    if (!isRecord(item)) continue;
+    const type = asTrimmedString(item.type).toLowerCase();
+    if (!RESPONSES_TOOL_OUTPUT_ITEM_TYPES.has(type)) continue;
+    const callId = responsesToolLifecycleCallId(item);
+    if (!callId) continue;
+    const existing = outputsByCallId.get(callId);
+    if (existing) existing.push(item);
+    else outputsByCallId.set(callId, [item]);
+  }
+
+  if (outputsByCallId.size <= 0) return input;
+
+  const emitted = new Set<unknown>();
+  const grouped: unknown[] = [];
+
+  for (const item of input) {
+    if (isRecord(item)) {
+      const type = asTrimmedString(item.type).toLowerCase();
+
+      if (RESPONSES_TOOL_CALL_ITEM_TYPES.has(type)) {
+        grouped.push(item);
+        const callId = responsesToolLifecycleCallId(item);
+        const outputs = callId ? outputsByCallId.get(callId) : undefined;
+        if (outputs) {
+          for (const output of outputs) {
+            if (emitted.has(output)) continue;
+            grouped.push(output);
+            emitted.add(output);
+          }
+        }
+        continue;
+      }
+
+      if (RESPONSES_TOOL_OUTPUT_ITEM_TYPES.has(type)) {
+        if (emitted.has(item)) continue;
+        grouped.push(item);
+        emitted.add(item);
+        continue;
+      }
+    }
+
+    grouped.push(item);
+  }
+
+  return grouped;
+}
+
+// Thinking-mode Responses upstreams (e.g. DeepSeek) require the reasoning that produced a tool call
+// to travel with every `function_call`. A single assistant turn emitted as
+// `[reasoning, message, function_call, function_call, outputs]` carries the reasoning only once, so
+// the upstream rejects the later call with "The `reasoning_text` in the thinking mode must be passed
+// back to the API.". Repeat the most recent reasoning item before each `function_call` that does not
+// already have its own, so every tool call keeps an adjacent reasoning item.
+export function repeatReasoningBeforeToolCalls(input: unknown[]): unknown[] {
+  let latestReasoning: unknown = null;
+  let availableReasoning = false;
+  let mutated = false;
+  const repeated: unknown[] = [];
+
+  for (const item of input) {
+    if (!isRecord(item)) {
+      repeated.push(item);
+      continue;
+    }
+
+    const type = asTrimmedString(item.type).toLowerCase();
+
+    if (type === 'reasoning') {
+      latestReasoning = item;
+      availableReasoning = true;
+      repeated.push(item);
+      continue;
+    }
+
+    if (RESPONSES_TOOL_CALL_ITEM_TYPES.has(type)) {
+      if (availableReasoning) {
+        availableReasoning = false;
+      } else if (latestReasoning) {
+        repeated.push(latestReasoning);
+        mutated = true;
+      }
+      repeated.push(item);
+      continue;
+    }
+
+    if (RESPONSES_TOOL_OUTPUT_ITEM_TYPES.has(type)) {
+      availableReasoning = false;
+      repeated.push(item);
+      continue;
+    }
+
+    repeated.push(item);
+  }
+
+  return mutated ? repeated : input;
+}
+
 export function normalizeResponsesMessageItem(item: Record<string, unknown>): Record<string, unknown> {
   const type = asTrimmedString(item.type).toLowerCase();
   if (RESPONSES_TOOL_CALL_ITEM_TYPES.has(type) || RESPONSES_TOOL_OUTPUT_ITEM_TYPES.has(type)) {

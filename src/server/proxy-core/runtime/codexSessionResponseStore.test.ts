@@ -76,6 +76,83 @@ describe('codexSessionResponseStore', () => {
     resetCodexSessionResponseStore();
   });
 
+  it('does not reuse a continuation id across upstream model changes on the same downstream session', () => {
+    resetCodexSessionResponseStore();
+
+    const previousModelKey = buildCodexSessionResponseStoreKey({
+      sessionId: 'session-model-isolation',
+      siteId: 10,
+      model: 'gpt-6.1-sol',
+      accountId: 20,
+      channelId: 30,
+    });
+    const remappedModelKey = buildCodexSessionResponseStoreKey({
+      sessionId: 'session-model-isolation',
+      siteId: 10,
+      model: 'deepseek-v4-pro',
+      accountId: 20,
+      channelId: 30,
+    });
+
+    setCodexSessionResponseId(previousModelKey, 'resp-model-a');
+
+    expect(getCodexSessionResponseId(previousModelKey)).toBe('resp-model-a');
+    expect(getCodexSessionResponseId(remappedModelKey)).toBeNull();
+
+    resetCodexSessionResponseStore();
+  });
+
+  it('does not reuse a continuation id across sites on the same downstream session', () => {
+    resetCodexSessionResponseStore();
+
+    const originalSiteKey = buildCodexSessionResponseStoreKey({
+      sessionId: 'session-site-isolation',
+      siteId: 10,
+      model: 'gpt-6.1-sol',
+      accountId: 20,
+      channelId: 30,
+    });
+    const otherSiteKey = buildCodexSessionResponseStoreKey({
+      sessionId: 'session-site-isolation',
+      siteId: 11,
+      model: 'gpt-6.1-sol',
+      accountId: 21,
+      channelId: 31,
+    });
+
+    setCodexSessionResponseId(originalSiteKey, 'resp-site-a');
+
+    expect(getCodexSessionResponseId(originalSiteKey)).toBe('resp-site-a');
+    expect(getCodexSessionResponseId(otherSiteKey)).toBeNull();
+
+    resetCodexSessionResponseStore();
+  });
+
+  it('still reuses a continuation id across channel drift when site and upstream model match', () => {
+    resetCodexSessionResponseStore();
+
+    const originalScopedKey = buildCodexSessionResponseStoreKey({
+      sessionId: 'session-scoped-drift',
+      siteId: 10,
+      model: 'gpt-6.1-sol',
+      accountId: 20,
+      channelId: 30,
+    });
+    const driftedScopedKey = buildCodexSessionResponseStoreKey({
+      sessionId: 'session-scoped-drift',
+      siteId: 10,
+      model: 'gpt-6.1-sol',
+      accountId: 21,
+      channelId: 31,
+    });
+
+    setCodexSessionResponseId(originalScopedKey, 'resp-scoped-drift');
+
+    expect(getCodexSessionResponseId(driftedScopedKey)).toBe('resp-scoped-drift');
+
+    resetCodexSessionResponseStore();
+  });
+
   it('does not collapse distinct downstream sessions when scoped session ids contain delimiters', () => {
     resetCodexSessionResponseStore();
 

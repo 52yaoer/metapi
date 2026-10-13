@@ -12,9 +12,11 @@ type ParsedEndpointErrorShape = {
 
 const REQUEST_VALIDATION_PATTERNS: RegExp[] = [
   /no\s+tool\s+call\s+found\s+for\s+tool\s+output/i,
+  /no\s+tool\s+output\s+found\s+for\s+tool\s+call/i,
   /failed\s+to\s+deserialize/i,
   /messages\[\d+\].*(?:unknown\s+variant|invalid\s+type)/i,
   /reasoning_content.*must\s+be\s+passed\s+back/i,
+  /reasoning_text.*must\s+be\s+passed\s+back/i,
   /invalid\s+request\s+body/i,
   /invalid\s+json/i,
   /missing\s+required/i,

@@ -1015,6 +1015,115 @@ describe('responses proxy codex oauth refresh', () => {
     ]);
   });
 
+  it('does not inject previous_response_id for codex tool-output follow-ups after the session is remapped to a different upstream model', async () => {
+    const previousModelSelected = {
+      channel: { id: 41, routeId: 42 },
+      site: { name: 'codex-site', url: 'https://chatgpt.com/backend-api/codex', platform: 'codex' },
+      account: {
+        id: 43,
+        username: 'codex-user-c@example.com',
+        extraConfig: JSON.stringify({
+          credentialMode: 'session',
+          oauth: {
+            provider: 'codex',
+            accountId: 'chatgpt-account-789',
+            email: 'codex-user-c@example.com',
+            planType: 'plus',
+          },
+        }),
+      },
+      tokenName: 'default-c',
+      tokenValue: 'expired-access-token-c',
+      actualModel: 'gpt-6.1-sol',
+    };
+    const remappedModelSelected = {
+      ...previousModelSelected,
+      actualModel: 'deepseek-v4-pro',
+    };
+
+    selectChannelMock
+      .mockReset()
+      .mockReturnValueOnce(previousModelSelected)
+      .mockReturnValueOnce(remappedModelSelected);
+    selectPreferredChannelMock
+      .mockReset()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null);
+
+    fetchMock
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        id: 'resp_codex_prev_remap_1',
+        object: 'response',
+        model: 'gpt-6.1-sol',
+        status: 'completed',
+        output_text: 'tool call issued',
+        usage: { input_tokens: 4, output_tokens: 2, total_tokens: 6 },
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        id: 'resp_codex_prev_remap_2',
+        object: 'response',
+        model: 'deepseek-v4-pro',
+        status: 'completed',
+        output_text: 'tool result accepted after model remap',
+        usage: { input_tokens: 5, output_tokens: 2, total_tokens: 7 },
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }));
+
+    const headers = {
+      session_id: 'session-http-prev-remap',
+      'user-agent': 'CodexClient/1.0',
+    };
+
+    const firstResponse = await app.inject({
+      method: 'POST',
+      url: '/v1/responses',
+      headers,
+      payload: {
+        model: 'gpt-6.1-sol',
+        input: 'start codex tool flow',
+      },
+    });
+    expect(firstResponse.statusCode).toBe(200);
+
+    const secondResponse = await app.inject({
+      method: 'POST',
+      url: '/v1/responses',
+      headers,
+      payload: {
+        model: 'deepseek-v4-pro',
+        input: [
+          {
+            id: 'tool_out_remap_1',
+            type: 'function_call_output',
+            call_id: 'call_remap_1',
+            output: '{"ok":true}',
+          },
+        ],
+      },
+    });
+
+    expect(secondResponse.statusCode).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    const [, secondOptions] = fetchMock.mock.calls[1] as [string, any];
+    const secondBody = JSON.parse(secondOptions.body);
+    expect(secondBody.previous_response_id).toBeUndefined();
+    expect(secondBody.model).toBe('deepseek-v4-pro');
+    expect(secondBody.input).toEqual([
+      {
+        id: 'tool_out_remap_1',
+        type: 'function_call_output',
+        call_id: 'call_remap_1',
+        output: '{"ok":true}',
+      },
+    ]);
+  });
+
   it('drops stale previous_response_id and retries codex responses requests once', async () => {
     fetchMock
       .mockResolvedValueOnce(new Response(JSON.stringify({

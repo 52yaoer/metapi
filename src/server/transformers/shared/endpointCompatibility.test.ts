@@ -11,9 +11,12 @@ import {
 describe('request validation and protocol fallback', () => {
   it.each([
     [400, 'No tool call found for tool output with call_id call_2.'],
+    [400, 'No tool output found for tool call call_2.'],
+    [400, '[upstream:/v1/responses] Upstream returned HTTP 400: No tool output found for tool call call_miQVAEjsVfVlMJfEkIIqxzeq. (request_id: 2fa8efe1-31da-414d-b79c-0742914cadbe)'],
     [422, 'Failed to deserialize the JSON body: messages[45]: unknown variant `web_search_call`'],
     [422, 'messages[129]: invalid type: string, expected struct OpenAICompletionImageUrl'],
     [400, 'The `reasoning_content` in the thinking mode must be passed back to the API.'],
+    [400, 'The `reasoning_text` in the thinking mode must be passed back to the API.'],
     [400, 'The request exceeds the model context limit. Shorten the input and retry.'],
     [400, 'Temperature must be between 0 and 2.'],
   ])('keeps HTTP %s request errors out of protocol downgrade', (status, message) => {

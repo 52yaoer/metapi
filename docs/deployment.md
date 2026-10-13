@@ -309,6 +309,58 @@ docker compose up -d
 docker image prune -f
 ```
 
+### 从源码构建并离线更新
+
+离线镜像包含当前工程的前后端和运行依赖。构建机器需要联网下载基础镜像与依赖，目标服务器只需 Docker 和 Compose。
+
+先在目标服务器运行 `uname -m`：`x86_64` 对应 `linux/amd64`，`aarch64` 对应 `linux/arm64`。在仓库根目录构建并导出，例如为 x86_64 服务器制作镜像：
+
+```bash
+set -e
+set -o pipefail
+docker buildx build --platform linux/amd64 \
+  -f docker/Dockerfile -t metapi:offline-20261012 --load .
+mkdir -p release
+docker save metapi:offline-20261012 | gzip > release/metapi-offline-20261012-linux-amd64.tar.gz
+cd release
+shasum -a 256 metapi-offline-20261012-linux-amd64.tar.gz > SHA256SUMS
+```
+
+Apple Silicon 构建 x86_64 镜像也必须指定 `--platform linux/amd64`。每次更新使用新的镜像标签和包名，便于核对版本和回滚。
+
+服务器的 Compose 服务配置增加镜像变量及离线拉取策略，保留原有端口、数据挂载和环境变量：
+
+```yaml
+services:
+  metapi:
+    image: ${METAPI_IMAGE:-1467078763/metapi:latest}
+    pull_policy: never
+```
+
+将镜像包和 `SHA256SUMS` 上传到服务器的 Compose 目录。在该目录执行：
+
+```bash
+set -e
+sha256sum -c SHA256SUMS
+docker load -i metapi-offline-20261012-linux-amd64.tar.gz
+current_container=$(docker compose ps -q metapi)
+current_image=$(docker inspect --format '{{.Image}}' "$current_container")
+docker tag "$current_image" metapi:before-offline-update
+export METAPI_IMAGE=metapi:offline-20261012
+docker compose config --quiet
+docker compose stop metapi
+tar -czf data-before-offline-update.tar.gz data
+docker compose up -d --pull never --no-build metapi
+docker compose ps
+docker compose logs --tail 80 metapi
+```
+
+执行 Compose 前，`AUTH_TOKEN`、`PROXY_TOKEN` 必须由现有 shell 环境或服务器的 `.env` 提供；使用原有值。将 `METAPI_IMAGE` 写入服务器 `.env` 后，后续启动会继续使用该版本。无需执行 `docker compose pull`，也无需上传本机的 `.env`、`node_modules` 或 `dist`。
+
+停止容器后再备份整个 `data` 目录，可以同时保留 SQLite 数据库及 WAL 文件的一致状态。`set -e` 会在校验、导入或备份失败时停止后续步骤。若数据备份失败，先设置 `export METAPI_IMAGE=metapi:before-offline-update` 并执行 `docker compose up -d --pull never --no-build metapi` 恢复原服务，再排查失败原因。
+
+回滚镜像时设置 `METAPI_IMAGE=metapi:before-offline-update` 后执行同一条 `docker compose up` 命令。若更新包含数据库迁移，回滚前还需停止服务并恢复匹配版本的数据备份。
+
 ## 回滚
 
 如果升级后出现问题，请参考 [运维手册 → 数据备份与恢复](./operations.md#数据备份) 进行回滚。

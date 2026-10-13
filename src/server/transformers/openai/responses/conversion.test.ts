@@ -150,6 +150,50 @@ describe('responses conversion single source of truth', () => {
 });
 
 describe('sanitizeResponsesBodyForProxy', () => {
+  it('groups a function_call_output with its function_call so an interleaved message cannot orphan the call', () => {
+    const result = sanitizeResponsesBodyForProxy(
+      {
+        model: 'gpt-5',
+        input: [
+          { type: 'reasoning', id: 'rs_1', summary: [], content: [{ type: 'reasoning_text', text: 'think' }] },
+          { type: 'function_call', id: 'fc_1', call_id: 'call_1', name: 'exec_command', arguments: '{}' },
+          { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'working' }] },
+          { type: 'reasoning', id: 'rs_2', summary: [], content: [{ type: 'reasoning_text', text: 'after' }] },
+          { type: 'function_call_output', id: 'fco_1', call_id: 'call_1', output: 'ok' },
+        ],
+      },
+      'gpt-5',
+      true,
+    );
+
+    expect((result.input as Array<Record<string, unknown>>).map((item) => item.type)).toEqual([
+      'reasoning',
+      'function_call',
+      'function_call_output',
+      'message',
+      'reasoning',
+    ]);
+  });
+
+  it('keeps orphan function_call_output items in place for continuation turns', () => {
+    const result = sanitizeResponsesBodyForProxy(
+      {
+        model: 'gpt-5',
+        input: [
+          { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'go' }] },
+          { type: 'function_call_output', id: 'fco_orphan', call_id: 'call_orphan', output: 'ok' },
+        ],
+      },
+      'gpt-5',
+      true,
+    );
+
+    expect((result.input as Array<Record<string, unknown>>).map((item) => item.type)).toEqual([
+      'message',
+      'function_call_output',
+    ]);
+  });
+
   it('preserves newer Responses request fields needed by the proxy', () => {
     const result = sanitizeResponsesBodyForProxy(
       {
@@ -1740,6 +1784,56 @@ describe('convertResponsesBodyToOpenAiBody', () => {
         verbosity: 'high',
       },
     });
+  });
+
+  it('repeats the turn reasoning before each tool call so thinking-mode upstreams keep reasoning_text', () => {
+    const candidates = buildResponsesCompatibilityBodies({
+      model: 'gpt-5',
+      stream: true,
+      input: [
+        { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'check both cities' }] },
+        { type: 'reasoning', id: 'rs_1', content: [{ type: 'reasoning_text', text: 'think' }] },
+        { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'calling' }] },
+        { type: 'function_call', call_id: 'call_1', name: 'get_weather', arguments: '{"city":"Paris"}' },
+        { type: 'function_call', call_id: 'call_2', name: 'get_weather', arguments: '{"city":"London"}' },
+        { type: 'function_call_output', call_id: 'call_1', output: '12C' },
+        { type: 'function_call_output', call_id: 'call_2', output: '9C' },
+      ],
+    });
+
+    const repeated = candidates.find((candidate) => Array.isArray(candidate.input)
+      && (candidate.input as Array<Record<string, unknown>>)
+        .filter((item) => item?.type === 'reasoning').length === 2);
+    expect(repeated).toBeTruthy();
+    expect((repeated!.input as Array<Record<string, unknown>>).map((item) => item.type)).toEqual([
+      'message',
+      'reasoning',
+      'message',
+      'function_call',
+      'reasoning',
+      'function_call',
+      'function_call_output',
+      'function_call_output',
+    ]);
+  });
+
+  it('keeps a single reasoning item when every tool call already carries its own', () => {
+    const candidates = buildResponsesCompatibilityBodies({
+      model: 'gpt-5',
+      stream: true,
+      input: [
+        { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'go' }] },
+        { type: 'reasoning', id: 'rs_1', content: [{ type: 'reasoning_text', text: 'a' }] },
+        { type: 'function_call', call_id: 'call_1', name: 'f', arguments: '{}' },
+        { type: 'function_call_output', call_id: 'call_1', output: 'ok' },
+      ],
+    });
+
+    for (const candidate of candidates) {
+      if (!Array.isArray(candidate.input)) continue;
+      expect((candidate.input as Array<Record<string, unknown>>)
+        .filter((item) => item?.type === 'reasoning').length).toBe(1);
+    }
   });
 
   it('does not generate extra compatibility bodies for sub2api when responses-only semantics are already present', () => {

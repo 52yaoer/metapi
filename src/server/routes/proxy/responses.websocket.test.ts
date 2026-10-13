@@ -1543,17 +1543,17 @@ describe('responses websocket transport', () => {
       call_id: 'call_1',
     });
     expect(secondBody.input[2]).toEqual({
+      id: 'tool_out_1',
+      type: 'function_call_output',
+      call_id: 'call_1',
+      output: 'tool result',
+    });
+    expect(secondBody.input[3]).toEqual({
       id: 'msg_1',
       type: 'message',
       role: 'assistant',
       status: 'completed',
       content: [{ type: 'output_text', text: 'call tool' }],
-    });
-    expect(secondBody.input[3]).toEqual({
-      id: 'tool_out_1',
-      type: 'function_call_output',
-      call_id: 'call_1',
-      output: 'tool result',
     });
   });
 
@@ -1707,6 +1707,12 @@ describe('responses websocket transport', () => {
       call_id: 'call_1',
     });
     expect(secondBody.input[2]).toEqual({
+      id: 'tool_out_1',
+      type: 'function_call_output',
+      call_id: 'call_1',
+      output: 'tool result',
+    });
+    expect(secondBody.input[3]).toEqual({
       id: 'msg_1',
       type: 'message',
       role: 'assistant',
@@ -1811,17 +1817,17 @@ describe('responses websocket transport', () => {
       call_id: 'call_1',
     });
     expect(secondBody.input[2]).toEqual({
+      id: 'tool_out_1',
+      type: 'function_call_output',
+      call_id: 'call_1',
+      output: 'tool result',
+    });
+    expect(secondBody.input[3]).toEqual({
       id: 'msg_1',
       type: 'message',
       role: 'assistant',
       status: 'completed',
       content: [{ type: 'output_text', text: 'call tool' }],
-    });
-    expect(secondBody.input[3]).toEqual({
-      id: 'tool_out_1',
-      type: 'function_call_output',
-      call_id: 'call_1',
-      output: 'tool result',
     });
   });
 

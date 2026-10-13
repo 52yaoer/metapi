@@ -11,49 +11,67 @@ type SessionResponseEntry = {
 const codexSessionResponseIds = new Map<string, SessionResponseEntry>();
 
 const SCOPED_SESSION_SEGMENT_PREFIX = 'session:';
-const SCOPED_STORE_KEY_SEGMENT_PATTERN = /^(site|account|channel):\d+$/;
+const SITE_SCOPE_SEGMENT_PATTERN = /^site:\d+$/;
+const MODEL_SCOPE_SEGMENT_PATTERN = /^model:.+$/;
+const DRIFT_SCOPE_SEGMENT_PATTERN = /^(?:account|channel):\d+$/;
 
 function buildScopedSessionSegment(sessionId: string): string {
   return `${SCOPED_SESSION_SEGMENT_PREFIX}${encodeURIComponent(sessionId)}`;
 }
 
-function extractScopedSessionSegment(sessionId: string): string {
+function buildScopedModelSegment(model: string): string {
+  return `model:${encodeURIComponent(model)}`;
+}
+
+type ParsedScopedSessionKey = {
+  scopeSegments: string[];
+  sessionSegment: string;
+};
+
+// A scoped store key looks like `site:<id>|model:<model>|account:<id>|channel:<id>|session:<id>`.
+// The scope reduces to the site and upstream model that actually own the upstream response id, so a
+// remembered continuation id is never reused across a different upstream identity.
+function parseScopedSessionKey(sessionId: string): ParsedScopedSessionKey | null {
   const normalizedSessionId = normalizeSessionId(sessionId);
-  if (!normalizedSessionId) return '';
+  if (!normalizedSessionId) return null;
+  if (normalizedSessionId.startsWith(SCOPED_SESSION_SEGMENT_PREFIX)) return null;
 
-  if (normalizedSessionId.startsWith(SCOPED_SESSION_SEGMENT_PREFIX)) {
-    return normalizedSessionId;
-  }
-
-  const scopedSegments = normalizedSessionId
+  const segments = normalizedSessionId
     .split('|')
     .map((segment) => segment.trim())
     .filter(Boolean);
-  if (scopedSegments.length <= 1) return '';
+  if (segments.length <= 1) return null;
 
-  const sessionSegment = scopedSegments[scopedSegments.length - 1];
-  if (!sessionSegment.startsWith(SCOPED_SESSION_SEGMENT_PREFIX)) {
-    return '';
+  const sessionSegment = segments[segments.length - 1];
+  if (!sessionSegment.startsWith(SCOPED_SESSION_SEGMENT_PREFIX)) return null;
+
+  const scopeSegments: string[] = [];
+  for (const segment of segments.slice(0, -1)) {
+    if (SITE_SCOPE_SEGMENT_PATTERN.test(segment) || MODEL_SCOPE_SEGMENT_PATTERN.test(segment)) {
+      scopeSegments.push(segment);
+      continue;
+    }
+    if (DRIFT_SCOPE_SEGMENT_PATTERN.test(segment)) continue;
+    return null;
   }
-  const scopeSegments = scopedSegments.slice(0, -1);
-  if (!scopeSegments.every((segment) => SCOPED_STORE_KEY_SEGMENT_PATTERN.test(segment))) {
-    return '';
-  }
-  return sessionSegment;
+
+  return { scopeSegments, sessionSegment };
 }
 
-function getBareSessionStoreKey(sessionId: string): string {
-  return extractScopedSessionSegment(sessionId);
+function buildScopeSessionStoreKey(sessionId: string): string {
+  const parsed = parseScopedSessionKey(sessionId);
+  if (!parsed) return '';
+  return [...parsed.scopeSegments, parsed.sessionSegment].join('|');
 }
 
 function getFallbackSessionStoreKeys(sessionId: string): string[] {
   const normalizedSessionId = normalizeSessionId(sessionId);
   if (!normalizedSessionId) return [];
 
-  const bareSessionKey = getBareSessionStoreKey(normalizedSessionId);
-  if (!bareSessionKey) return [];
-  if (normalizedSessionId === bareSessionKey) return [];
-  return [bareSessionKey];
+  const scopeSessionKey = buildScopeSessionStoreKey(normalizedSessionId);
+  if (!scopeSessionKey) return [];
+  if (normalizedSessionId === scopeSessionKey) return [];
+  return [scopeSessionKey];
 }
 
 function getSessionStoreKeys(sessionId: string): string[] {
@@ -65,12 +83,12 @@ function getSessionStoreKeys(sessionId: string): string[] {
   ];
 }
 
-function reconcileScopedSessionFallback(bareSessionKey: string): void {
-  if (!bareSessionKey) return;
+function reconcileScopedSessionFallback(scopeSessionKey: string): void {
+  if (!scopeSessionKey) return;
 
   for (const key of codexSessionResponseIds.keys()) {
-    if (key === bareSessionKey) continue;
-    if (getBareSessionStoreKey(key) !== bareSessionKey) continue;
+    if (key === scopeSessionKey) continue;
+    if (buildScopeSessionStoreKey(key) !== scopeSessionKey) continue;
     codexSessionResponseIds.delete(key);
   }
 }
@@ -109,13 +127,16 @@ function touchSessionResponseEntry(sessionId: string, nowMs = Date.now()): void 
 export function buildCodexSessionResponseStoreKey(input: {
   sessionId: string;
   siteId?: number | null;
+  model?: string | null;
   accountId?: number | null;
   channelId?: number | null;
 }): string {
   const normalizedSessionId = normalizeSessionId(input.sessionId);
   if (!normalizedSessionId) return '';
+  const normalizedModel = typeof input.model === 'string' ? input.model.trim() : '';
   const parts = [
     Number.isFinite(input.siteId as number) && Number(input.siteId) > 0 ? `site:${Math.trunc(Number(input.siteId))}` : '',
+    normalizedModel ? buildScopedModelSegment(normalizedModel) : '',
     Number.isFinite(input.accountId as number) && Number(input.accountId) > 0 ? `account:${Math.trunc(Number(input.accountId))}` : '',
     Number.isFinite(input.channelId as number) && Number(input.channelId) > 0 ? `channel:${Math.trunc(Number(input.channelId))}` : '',
     buildScopedSessionSegment(normalizedSessionId),

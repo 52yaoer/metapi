@@ -700,6 +700,7 @@ async function handleResponsesWebsocketConnection(
             const websocketRuntimeSessionKey = buildCodexSessionResponseStoreKey({
               sessionId: websocketSessionId,
               siteId: codexWebsocketChannel.site.id,
+              model: asTrimmedString(codexWebsocketChannel.actualModel) || requestModel,
               accountId: codexWebsocketChannel.account.id,
               channelId: codexWebsocketChannel.channel.id,
             }) || websocketSessionId;

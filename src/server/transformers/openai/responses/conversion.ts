@@ -1,4 +1,5 @@
 import {
+  groupResponsesToolCallOutputs,
   normalizeResponsesInputForCompatibility,
   normalizeResponsesMessageContentBlocks,
   normalizeResponsesMessageItem,
@@ -466,10 +467,13 @@ function normalizeResponsesBodyForCompatibility(
   body: Record<string, unknown>,
 ): Record<string, unknown> {
   const nextInput = normalizeResponsesInputForCompatibility(body.input);
-  if (nextInput === body.input) return body;
+  const groupedInput = Array.isArray(nextInput)
+    ? groupResponsesToolCallOutputs(nextInput)
+    : nextInput;
+  if (groupedInput === body.input) return body;
   return {
     ...body,
-    input: nextInput,
+    input: groupedInput,
   };
 }
 

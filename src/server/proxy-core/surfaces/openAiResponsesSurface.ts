@@ -412,6 +412,7 @@ export async function handleOpenAiResponsesSurfaceRequest(
         ? buildCodexSessionResponseStoreKey({
           sessionId: codexSessionId,
           siteId: selected.site.id,
+          model: modelName,
           accountId: selected.account.id,
           channelId: selected.channel.id,
         })

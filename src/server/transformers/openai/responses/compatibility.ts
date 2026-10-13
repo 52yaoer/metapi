@@ -2,6 +2,7 @@ import {
   normalizeResponsesInputForCompatibility,
   normalizeResponsesMessageContent,
   normalizeResponsesMessageItem,
+  repeatReasoningBeforeToolCalls,
 } from './normalization.js';
 import {
   convertOpenAiBodyToResponsesBody,
@@ -101,6 +102,12 @@ export function buildResponsesCompatibilityBodies(
   }
   if (!shouldPreserveResponsesCompatibilitySemantics(options?.sitePlatform, body)) {
     push(buildStrictResponsesBody(body));
+  }
+  if (Array.isArray(body.input)) {
+    const withRepeatedReasoning = repeatReasoningBeforeToolCalls(body.input);
+    if (withRepeatedReasoning !== body.input) {
+      push({ ...body, input: withRepeatedReasoning });
+    }
   }
   return candidates;
 }

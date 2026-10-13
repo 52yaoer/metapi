@@ -1,8 +1,12 @@
 node_modules
 dist
+release
 data
 .git
 .env
+.env.*
+**/.env
+**/.env.*
 *.md
 docs
 .github

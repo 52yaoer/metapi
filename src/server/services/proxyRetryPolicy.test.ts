@@ -8,6 +8,12 @@ describe('proxyRetryPolicy', () => {
     expect(shouldAbortSameSiteEndpointFallback(status, text)).toBe(true);
   });
 
+  it.each([400, 422, 502])('does not retry tool history validation errors in the reverse phrasing wrapped as HTTP %s', (status) => {
+    const text = '[upstream:/v1/responses] Upstream returned HTTP 400: No tool output found for tool call call_2. (request_id: abc)';
+    expect(shouldRetryProxyRequest(status, text)).toBe(false);
+    expect(shouldAbortSameSiteEndpointFallback(status, text)).toBe(true);
+  });
+
   it.each([400, 200, 502, 503])('does not retry context limit failures reported with HTTP %s', (status) => {
     expect(shouldRetryProxyRequest(status, 'The request exceeds the model context limit. Shorten the input and retry.')).toBe(false);
     expect(shouldRetryProxyRequest(status, '{"error":{"code":"context_length_exceeded"}}')).toBe(false);
