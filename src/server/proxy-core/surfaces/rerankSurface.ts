@@ -138,7 +138,7 @@ export async function handleRerankSurfaceRequest(
       return reply.code(endpointResult.upstream.status).send(data);
     } catch (error) {
       const failure = getSurfaceRequestFailure(error);
-      if (failure.isSiteConcurrencyBusy) {
+      if (failure.isLocalFailure) {
         await failureToolkit.log({
           selected,
           modelRequested: requestedModel,

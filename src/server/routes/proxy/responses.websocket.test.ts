@@ -85,7 +85,8 @@ vi.mock('../../services/modelPricingService.js', () => ({
   fetchModelPricingCatalog: async () => null,
 }));
 
-vi.mock('../../services/proxyRetryPolicy.js', () => ({
+vi.mock('../../services/proxyRetryPolicy.js', async () => ({
+  ...await vi.importActual<typeof import('../../services/proxyRetryPolicy.js')>('../../services/proxyRetryPolicy.js'),
   shouldRetryProxyRequest: () => false,
   shouldAbortSameSiteEndpointFallback: () => false,
   RETRYABLE_TIMEOUT_PATTERNS: [/(request timed out|connection timed out|read timeout|\btimed out\b)/i],
@@ -106,6 +107,7 @@ vi.mock('../../db/index.js', () => ({
     select: () => ({
       from: () => ({
         where: () => ({
+          all: async () => siteApiEndpointRows,
           orderBy: () => ({
             all: async () => siteApiEndpointRows,
           }),
@@ -550,16 +552,16 @@ describe('responses websocket transport', () => {
     expect(upstreamConnectionCount).toBe(1);
   });
 
-  it('uses the configured site api endpoint pool for codex websocket transport', async () => {
+  it.each([false, true])('uses the configured site api endpoint pool for codex websocket transport (cooling: %s)', async (cooling) => {
     siteApiEndpointRows = [{
       id: 901,
       siteId: 44,
       url: upstreamSiteUrl,
       enabled: true,
       sortOrder: 0,
-      cooldownUntil: null,
+      cooldownUntil: cooling ? new Date(Date.now() + 60_000).toISOString() : null,
       lastSelectedAt: null,
-      lastFailedAt: null,
+      lastFailedAt: cooling ? new Date(Date.now() - 60_000).toISOString() : null,
       lastFailureReason: null,
       updatedAt: null,
     }];
@@ -627,9 +629,10 @@ describe('responses websocket transport', () => {
 
     expect(errorMessage).toMatchObject({
       type: 'error',
-      status: 408,
+      status: 503,
       error: {
-        message: '当前站点的 API 请求地址均不可用',
+        type: 'server_error',
+        message: expect.stringContaining('当前站点的 API 请求地址均不可用'),
       },
     });
     expect(fetchMock).toHaveBeenCalledTimes(0);

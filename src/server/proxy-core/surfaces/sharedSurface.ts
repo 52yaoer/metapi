@@ -205,19 +205,21 @@ export async function runWithSurfaceSiteConcurrency<T>(
   operation: (siteBaseUrl: string) => Promise<T>,
 ): Promise<T> {
   // 即使站点不限制并发，也要经过地址池；这里的 0 只表示不限制租约数量。
-  return runWithSiteApiEndpointPool(site, (target) => operation(target.baseUrl));
+  return runWithSiteApiEndpointPool(site, (target) => operation(target.baseUrl), { allowCooldownRecovery: true });
 }
 
 export function getSurfaceRequestFailure(error: unknown): {
   status: number;
   message: string;
   isSiteConcurrencyBusy: boolean;
+  isLocalFailure: boolean;
 } {
   const endpointError = error as {
     name?: unknown;
     status?: unknown;
     rawErrText?: unknown;
     siteConcurrencyTimeout?: unknown;
+    siteApiEndpointUnavailable?: unknown;
   } | null;
   const isEndpointError = (
     error instanceof SiteApiEndpointRequestError
@@ -233,6 +235,8 @@ export function getSurfaceRequestFailure(error: unknown): {
     status,
     message,
     isSiteConcurrencyBusy: endpointError?.siteConcurrencyTimeout === true,
+    isLocalFailure: endpointError?.siteConcurrencyTimeout === true
+      || endpointError?.siteApiEndpointUnavailable === true,
   };
 }
 

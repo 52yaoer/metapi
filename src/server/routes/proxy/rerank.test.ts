@@ -4,6 +4,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const fetchMock = vi.fn();
 const selectChannelMock = vi.fn();
 const insertProxyLogMock = vi.fn();
+const recordFailureMock = vi.fn();
+const runWithSiteApiEndpointPoolMock = vi.fn();
 
 vi.mock('undici', async () => {
   const actual = await vi.importActual<typeof import('undici')>('undici');
@@ -24,7 +26,7 @@ vi.mock('../../proxy-core/channelSelection.js', () => ({
 vi.mock('../../services/tokenRouter.js', () => ({
   tokenRouter: {
     recordSuccess: vi.fn(),
-    recordFailure: vi.fn(),
+    recordFailure: (...args: unknown[]) => recordFailureMock(...args),
   },
 }));
 
@@ -38,9 +40,7 @@ vi.mock('../../services/siteApiEndpointService.js', () => ({
       this.firstByteLatencyMs = options.firstByteLatencyMs ?? null;
     }
   },
-  runWithSiteApiEndpointPool: async (site: { url: string }, callback: (target: { baseUrl: string }) => Promise<unknown>) => (
-    callback({ baseUrl: site.url })
-  ),
+  runWithSiteApiEndpointPool: (...args: unknown[]) => runWithSiteApiEndpointPoolMock(...args),
 }));
 
 vi.mock('../../services/alertService.js', () => ({
@@ -70,6 +70,11 @@ describe('/v1/rerank route', () => {
     fetchMock.mockReset();
     selectChannelMock.mockReset();
     insertProxyLogMock.mockReset();
+    recordFailureMock.mockReset();
+    runWithSiteApiEndpointPoolMock.mockReset();
+    runWithSiteApiEndpointPoolMock.mockImplementation(async (site: { url: string }, callback: (target: { baseUrl: string }) => Promise<unknown>) => (
+      callback({ baseUrl: site.url })
+    ));
     if (!app) {
       const { rerankProxyRoute } = await import('./rerank.js');
       app = Fastify();
@@ -88,6 +93,21 @@ describe('/v1/rerank route', () => {
   it('rejects requests without model', async () => {
     const response = await app.inject({ method: 'POST', url: '/v1/rerank', payload: { query: 'hello', documents: ['world'] } });
     expect(response.statusCode).toBe(400);
+  });
+
+  it('returns a local pool 503 without penalizing the selected channel or calling upstream', async () => {
+    runWithSiteApiEndpointPoolMock.mockRejectedValue(Object.assign(new Error('API 地址冷却中'), {
+      name: 'SiteApiEndpointRequestError', status: 503, siteApiEndpointUnavailable: true,
+    }));
+    const response = await app.inject({
+      method: 'POST', url: '/v1/rerank',
+      payload: { model: 'bge-reranker-v2-m3', query: 'hello', documents: ['world'] },
+    });
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({ error: { message: 'API 地址冷却中', type: 'server_error' } });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(recordFailureMock).not.toHaveBeenCalled();
+    expect(insertProxyLogMock).toHaveBeenCalledWith(expect.objectContaining({ status: 'failed', httpStatus: 503 }));
   });
 
   it('forwards rerank requests to the configured upstream endpoint', async () => {

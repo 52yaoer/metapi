@@ -21,6 +21,7 @@ import { insertProxyLog } from '../../services/proxyLogStore.js';
 import { fetchWithObservedFirstByte, getObservedResponseMeta } from '../../proxy-core/firstByteTimeout.js';
 import { getProxyMaxChannelRetries } from '../../services/proxyChannelRetry.js';
 import { runWithSiteApiEndpointPool, SiteApiEndpointRequestError } from '../../services/siteApiEndpointService.js';
+import { getSurfaceRequestFailure } from '../../proxy-core/surfaces/sharedSurface.js';
 import {
   buildForcedChannelUnavailableMessage,
   canRetryChannelSelection,
@@ -112,7 +113,7 @@ export async function completionsProxyRoute(app: FastifyInstance) {
             upstream: response,
             firstByteLatencyMs: observedFirstByteLatencyMs,
           };
-        });
+        }, { allowCooldownRecovery: true });
 
         if (isStream) {
           reply.raw.writeHead(200, {
@@ -318,14 +319,17 @@ export async function completionsProxyRoute(app: FastifyInstance) {
         );
         return reply.send(data);
       } catch (err: any) {
+        const { isLocalFailure } = getSurfaceRequestFailure(err);
         const status = err instanceof SiteApiEndpointRequestError ? (err.status || 0) : 0;
         const errorText = err?.message || 'network failure';
         const firstByteLatencyMs = err instanceof SiteApiEndpointRequestError ? err.firstByteLatencyMs : null;
-        await recordTokenRouterEventBestEffort('record channel failure', () => tokenRouter.recordFailure(selected.channel.id, {
-          status,
-          errorText,
-          modelName: upstreamModel,
-        }));
+        if (!isLocalFailure) {
+          await recordTokenRouterEventBestEffort('record channel failure', () => tokenRouter.recordFailure(selected.channel.id, {
+            status,
+            errorText,
+            modelName: upstreamModel,
+          }));
+        }
         logProxy(
           selected,
           requestedModel,
@@ -363,7 +367,7 @@ export async function completionsProxyRoute(app: FastifyInstance) {
           reason: errorText || 'network failure',
         });
         return reply.code(status || 502).send({
-          error: { message: status > 0 ? errorText : `Upstream error: ${errorText}`, type: 'upstream_error' },
+          error: { message: status > 0 ? errorText : `Upstream error: ${errorText}`, type: isLocalFailure ? 'server_error' : 'upstream_error' },
         });
       }
     }

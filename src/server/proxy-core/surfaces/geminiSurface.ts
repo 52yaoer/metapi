@@ -470,7 +470,7 @@ export async function geminiProxyRoute(app: FastifyInstance) {
         }
       } catch (error) {
         const failure = getSurfaceRequestFailure(error);
-        if (!failure.isSiteConcurrencyBusy) {
+        if (!failure.isLocalFailure) {
           await tokenRouter.recordFailure?.(selected.channel.id, {
             status: failure.status,
             errorText: failure.message,
@@ -481,7 +481,7 @@ export async function geminiProxyRoute(app: FastifyInstance) {
         lastText = JSON.stringify({
           error: {
             message: failure.message,
-            type: failure.isSiteConcurrencyBusy ? 'server_error' : 'upstream_error',
+            type: failure.isLocalFailure ? 'server_error' : 'upstream_error',
           },
         });
         if (canRetryChannelSelection(retryCount, forcedChannelId)) {
@@ -1456,11 +1456,10 @@ export async function geminiProxyRoute(app: FastifyInstance) {
         lastText = JSON.stringify({
           error: {
             message: failure.message,
-            type: failure.isSiteConcurrencyBusy ? 'server_error' : 'upstream_error',
+            type: failure.isLocalFailure ? 'server_error' : 'upstream_error',
           },
         });
-        // 并发槽位耗尽时没有请求上游，不应降低当前通道的健康度。
-        if (!failure.isSiteConcurrencyBusy) {
+        if (!failure.isLocalFailure) {
           await tokenRouter.recordFailure?.(selected.channel.id, {
             status: failure.status,
             errorText: failure.message,

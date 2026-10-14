@@ -860,7 +860,7 @@ export async function handleOpenAiResponsesSurfaceRequest(
             throw upstreamFailure;
           }
           return result;
-        });
+        }, { allowCooldownRecovery: true });
 
         const upstream = endpointResult.upstream;
         const successfulUpstreamPath = endpointResult.upstreamPath;
@@ -1364,8 +1364,8 @@ export async function handleOpenAiResponsesSurfaceRequest(
 	          selected,
 	        });
           const endpointFailureStatus = typeof err?.status === 'number' ? err.status : null;
-          if (err?.siteConcurrencyTimeout === true) {
-            const failure = getSurfaceRequestFailure(err);
+          const failure = getSurfaceRequestFailure(err);
+          if (failure.isLocalFailure) {
             await failureToolkit.log({
               selected,
               modelRequested: requestedModel,

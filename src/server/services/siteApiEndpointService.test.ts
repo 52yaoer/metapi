@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -38,9 +38,15 @@ describe('siteApiEndpointService', () => {
   });
 
   beforeEach(async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-14T02:00:00.000Z'));
     resetProxyChannelCoordinatorState();
     await db.delete(schema.siteApiEndpoints).run();
     await db.delete(schema.sites).run();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   afterAll(() => {
@@ -53,6 +59,13 @@ describe('siteApiEndpointService', () => {
       upstreamResponse: true,
     });
     expect(classifySiteApiEndpointFailure({ status: 400, error })).toMatchObject({ retryable: false, rotateToNextEndpoint: false });
+  });
+
+  it.each(['siteConcurrencyTimeout', 'siteApiEndpointUnavailable'] as const)('does not rotate or cool endpoints for local %s failures', (flag) => {
+    const error = new SiteApiEndpointRequestError('Site unavailable', { status: 503, [flag]: true });
+    expect(classifySiteApiEndpointFailure({ status: 503, error })).toMatchObject({
+      retryable: false, rotateToNextEndpoint: false,
+    });
   });
 
   it('returns a synthetic site-url fallback when the site has no configured api endpoints', async () => {
@@ -334,7 +347,7 @@ describe('siteApiEndpointService', () => {
     });
   });
 
-  it.each([429, 503])('does not cool a shared endpoint after an upstream HTTP %s response', async (status) => {
+  it.each([429, 500, 502, 503, 504, 520, 524])('does not cool a shared endpoint after an upstream HTTP %s response', async (status) => {
     const site = await db.insert(schema.sites).values({
       name: `shared-upstream-${status}-site`,
       url: 'https://panel.example.com',
@@ -370,6 +383,172 @@ describe('siteApiEndpointService', () => {
       endpointId: target.endpointId,
     }));
     expect(secondResult).toEqual({ endpointId: endpoint.id });
+  });
+
+  it('does not probe cooling addresses for callers that have not enabled recovery', async () => {
+    const site = await db.insert(schema.sites).values({
+      name: 'background-site', url: 'https://panel.example.com', platform: 'sub2api',
+    }).returning().get();
+    await db.insert(schema.siteApiEndpoints).values({
+      siteId: site.id, url: 'https://api.example.com', enabled: true,
+      lastFailedAt: '2026-10-14T01:59:00.000Z', cooldownUntil: '2026-10-14T02:04:00.000Z',
+    }).run();
+    const operation = vi.fn(async () => 'unexpected');
+    await expect(runWithSiteApiEndpointPool(site, operation)).rejects.toMatchObject({
+      status: 503, siteApiEndpointUnavailable: true,
+    });
+    expect(operation).not.toHaveBeenCalled();
+  });
+
+  it('does not probe a cooling backup after trying a healthy address that returned 429', async () => {
+    const site = await db.insert(schema.sites).values({
+      name: 'healthy-but-rate-limited-site', url: 'https://panel.example.com', platform: 'sub2api',
+    }).returning().get();
+    await db.insert(schema.siteApiEndpoints).values([
+      { siteId: site.id, url: 'https://api-primary.example.com', enabled: true },
+      { siteId: site.id, url: 'https://api-backup.example.com', enabled: true,
+        lastFailedAt: '2026-10-14T01:59:00.000Z', cooldownUntil: '2026-10-14T02:04:00.000Z' },
+    ]).run();
+    const rateLimitError = new SiteApiEndpointRequestError('HTTP 429: rate limited', { status: 429, upstreamResponse: true });
+    const operation = vi.fn(async (target: { baseUrl: string }) => {
+      if (target.baseUrl.includes('primary')) throw rateLimitError;
+      throw new TypeError('fetch failed');
+    });
+    await expect(runWithSiteApiEndpointPool(site, operation, { allowCooldownRecovery: true })).rejects.toBe(rateLimitError);
+    expect(operation).toHaveBeenCalledTimes(1);
+  });
+
+  it('recovers a cooling endpoint before the full cooldown expires', async () => {
+    const site = await db.insert(schema.sites).values({
+      name: 'recovering-site', url: 'https://panel.example.com', platform: 'sub2api',
+    }).returning().get();
+    const endpoint = await db.insert(schema.siteApiEndpoints).values({
+      siteId: site.id, url: 'https://api.example.com', enabled: true,
+      lastFailedAt: '2026-10-14T01:59:00.000Z',
+      cooldownUntil: '2026-10-14T02:04:00.000Z',
+      lastFailureReason: 'fetch failed',
+    }).returning().get();
+
+    expect(await selectSiteApiEndpointTarget(site)).toBeNull();
+    const result = await runWithSiteApiEndpointPool(site, async (target) => target.endpointId, { allowCooldownRecovery: true });
+    expect(result).toBe(endpoint.id);
+    expect(await db.select().from(schema.siteApiEndpoints)
+      .where(eq(schema.siteApiEndpoints.id, endpoint.id)).get()).toMatchObject({
+      cooldownUntil: null, lastFailureReason: null,
+      lastSelectedAt: '2026-10-14T02:00:00.000Z',
+    });
+  });
+
+  it('allows only one recovery request per site while all addresses are cooling', async () => {
+    const site = await db.insert(schema.sites).values({
+      name: 'single-recovery-site', url: 'https://panel.example.com', platform: 'sub2api',
+    }).returning().get();
+    await db.insert(schema.siteApiEndpoints).values([
+      { siteId: site.id, url: 'https://api-a.example.com', enabled: true,
+        lastFailedAt: '2026-10-14T01:59:00.000Z', cooldownUntil: '2026-10-14T02:04:00.000Z' },
+      { siteId: site.id, url: 'https://api-b.example.com', enabled: true,
+        lastFailedAt: '2026-10-14T01:59:10.000Z', cooldownUntil: '2026-10-14T02:04:10.000Z' },
+    ]).run();
+    let finishRecovery!: () => void;
+    const recoveryResult = new Promise<void>((resolve) => { finishRecovery = resolve; });
+    const operation = vi.fn(async () => recoveryResult);
+    const first = runWithSiteApiEndpointPool(site, operation, { allowCooldownRecovery: true });
+    const second = runWithSiteApiEndpointPool(site, operation, { allowCooldownRecovery: true });
+    const denied = expect(Promise.all([first, second])).rejects.toMatchObject({
+      status: 503, message: expect.stringContaining('恢复请求进行中'),
+    });
+    try {
+      await denied;
+      expect(operation).toHaveBeenCalledTimes(1);
+    } finally {
+      finishRecovery();
+      await Promise.allSettled([first, second]);
+    }
+    expect(await runWithSiteApiEndpointPool(site, async () => 'recovered')).toBe('recovered');
+  });
+
+  it('waits 30 seconds after a failed recovery before trying again', async () => {
+    const site = await db.insert(schema.sites).values({
+      name: 'failed-recovery-site', url: 'https://panel.example.com', platform: 'sub2api',
+    }).returning().get();
+    const endpoint = await db.insert(schema.siteApiEndpoints).values({
+      siteId: site.id, url: 'https://api.example.com', enabled: true,
+      lastFailedAt: '2026-10-14T01:59:00.000Z', cooldownUntil: '2026-10-14T02:04:00.000Z',
+    }).returning().get();
+    const networkError = new TypeError('fetch failed');
+    await expect(runWithSiteApiEndpointPool(site, async () => { throw networkError; }, { allowCooldownRecovery: true }))
+      .rejects.toBe(networkError);
+    const operation = vi.fn(async () => 'online');
+    await expect(runWithSiteApiEndpointPool(site, operation, { allowCooldownRecovery: true })).rejects.toMatchObject({ status: 503 });
+    vi.setSystemTime(new Date('2026-10-14T02:00:29.999Z'));
+    await expect(runWithSiteApiEndpointPool(site, operation, { allowCooldownRecovery: true })).rejects.toMatchObject({ status: 503 });
+    expect(operation).not.toHaveBeenCalled();
+    expect(await db.select().from(schema.siteApiEndpoints)
+      .where(eq(schema.siteApiEndpoints.id, endpoint.id)).get()).toMatchObject({
+      lastFailedAt: '2026-10-14T02:00:00.000Z', cooldownUntil: '2026-10-14T02:05:00.000Z',
+    });
+    vi.setSystemTime(new Date('2026-10-14T02:00:30.000Z'));
+    expect(await runWithSiteApiEndpointPool(site, operation, { allowCooldownRecovery: true })).toBe('online');
+    expect(operation).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not recover disabled endpoints or recently failed endpoints', async () => {
+    const site = await db.insert(schema.sites).values({
+      name: 'unavailable-site', url: 'https://panel.example.com', platform: 'sub2api',
+    }).returning().get();
+    await db.insert(schema.siteApiEndpoints).values({
+      siteId: site.id, url: 'https://api-disabled.example.com', enabled: false,
+    }).run();
+    const operation = vi.fn(async () => 'unexpected');
+    await expect(runWithSiteApiEndpointPool(site, operation, { allowCooldownRecovery: true })).rejects.toMatchObject({
+      status: 503, message: expect.stringContaining('已禁用'),
+    });
+    await db.insert(schema.siteApiEndpoints).values({
+      siteId: site.id, url: 'https://api-recent.example.com', enabled: true,
+      lastFailedAt: '2026-10-14T01:59:50.000Z', cooldownUntil: '2026-10-14T02:04:50.000Z',
+    }).run();
+    await expect(runWithSiteApiEndpointPool(site, operation, { allowCooldownRecovery: true })).rejects.toMatchObject({
+      status: 503, message: expect.stringContaining('冷却'),
+    });
+    expect(operation).not.toHaveBeenCalled();
+  });
+
+  it('uses a healthy backup without probing a cooling primary', async () => {
+    const site = await db.insert(schema.sites).values({
+      name: 'healthy-backup-site', url: 'https://panel.example.com', platform: 'sub2api',
+    }).returning().get();
+    await db.insert(schema.siteApiEndpoints).values([
+      { siteId: site.id, url: 'https://api-primary.example.com', enabled: true, sortOrder: 0,
+        lastFailedAt: '2026-10-14T01:59:00.000Z', cooldownUntil: '2026-10-14T02:04:00.000Z' },
+      { siteId: site.id, url: 'https://api-backup.example.com', enabled: true, sortOrder: 1 },
+    ]).run();
+    expect(await runWithSiteApiEndpointPool(site, async (target) => target.baseUrl, { allowCooldownRecovery: true }))
+      .toBe('https://api-backup.example.com');
+  });
+
+  it('tries each address once after an upstream 502 without cooling either address', async () => {
+    const site = await db.insert(schema.sites).values({
+      name: 'upstream-backup-site', url: 'https://panel.example.com', platform: 'sub2api',
+    }).returning().get();
+    await db.insert(schema.siteApiEndpoints).values([
+      { siteId: site.id, url: 'https://api-primary.example.com', enabled: true, sortOrder: 0 },
+      { siteId: site.id, url: 'https://api-backup.example.com', enabled: true, sortOrder: 1 },
+    ]).run();
+    const attempted: string[] = [];
+    const result = await runWithSiteApiEndpointPool(site, async (target) => {
+      attempted.push(target.baseUrl);
+      if (target.baseUrl.includes('primary')) {
+        throw new SiteApiEndpointRequestError('Cloudflare 502: Bad gateway', {
+          status: 502, upstreamResponse: true,
+        });
+      }
+      return 'backup succeeded';
+    });
+    expect(result).toBe('backup succeeded');
+    expect(attempted).toEqual(['https://api-primary.example.com', 'https://api-backup.example.com']);
+    const endpoints = await db.select().from(schema.siteApiEndpoints)
+      .where(eq(schema.siteApiEndpoints.siteId, site.id)).all();
+    expect(endpoints.every((endpoint) => endpoint.cooldownUntil === null)).toBe(true);
   });
 
   it('clears cooldown metadata and updates lastSelectedAt after a recorded success', async () => {

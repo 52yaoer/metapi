@@ -61,10 +61,10 @@ vi.mock('../../services/modelPricingService.js', () => ({
   fetchModelPricingCatalog: (arg: any) => fetchModelPricingCatalogMock(arg),
 }));
 
-vi.mock('../../services/proxyRetryPolicy.js', () => ({
+vi.mock('../../services/proxyRetryPolicy.js', async () => ({
+  ...await vi.importActual<typeof import('../../services/proxyRetryPolicy.js')>('../../services/proxyRetryPolicy.js'),
   shouldRetryProxyRequest: () => false,
   shouldAbortSameSiteEndpointFallback: () => false,
-  RETRYABLE_TIMEOUT_PATTERNS: [/(request timed out|connection timed out|read timeout|\btimed out\b)/i],
 }));
 
 vi.mock('../../services/proxyUsageFallbackService.js', () => ({

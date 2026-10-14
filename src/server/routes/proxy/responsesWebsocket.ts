@@ -12,6 +12,7 @@ import {
   type DownstreamTokenAuthSuccess,
 } from '../../services/downstreamApiKeyService.js';
 import { runWithSiteApiEndpointPool, SiteApiEndpointRequestError } from '../../services/siteApiEndpointService.js';
+import { getSurfaceRequestFailure } from '../../proxy-core/surfaces/sharedSurface.js';
 import { tokenRouter } from '../../services/tokenRouter.js';
 import { buildOauthProviderHeaders } from '../../services/oauth/service.js';
 import { getOauthInfoFromAccount } from '../../services/oauth/oauthAccount.js';
@@ -743,12 +744,18 @@ async function handleResponsesWebsocketConnection(
                     });
                   }
                 },
+                { allowCooldownRecovery: true },
               );
               lastResponseOutput = collectResponsesOutput(runtimeResult.events);
               for (const payload of runtimeResult.events) {
                 socket.send(JSON.stringify(payload));
               }
             } catch (error) {
+              const failure = getSurfaceRequestFailure(error);
+              if (failure.isLocalFailure) {
+                writeResponsesWebsocketError(socket, failure.status, failure.message);
+                return;
+              }
               const runtimeError = unwrapCodexWebsocketRuntimeError(error);
               if (runtimeError.status && runtimeError.events.length === 0) {
                 const forwarded = await forwardResponsesRequestViaHttp({

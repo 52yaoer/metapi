@@ -147,6 +147,27 @@ describe('selectSurfaceChannelForAttempt', () => {
     consoleErrorMock.mockClear();
   });
 
+  it.each([
+    { siteConcurrencyTimeout: true },
+    { siteApiEndpointUnavailable: true },
+  ])('classifies local site admission failures separately from upstream failures: %j', async (flags) => {
+    const { getSurfaceRequestFailure } = await import('./sharedSurface.js');
+    const error = Object.assign(new Error('local site unavailable'), {
+      name: 'SiteApiEndpointRequestError', status: 503, ...flags,
+    });
+    expect(getSurfaceRequestFailure(error)).toMatchObject({
+      status: 503, message: 'local site unavailable', isLocalFailure: true,
+    });
+  });
+
+  it('keeps an upstream 503 classified as an upstream failure', async () => {
+    const { getSurfaceRequestFailure } = await import('./sharedSurface.js');
+    const error = Object.assign(new Error('Service temporarily unavailable'), {
+      name: 'SiteApiEndpointRequestError', status: 503, siteApiEndpointUpstreamFailure: true,
+    });
+    expect(getSurfaceRequestFailure(error)).toMatchObject({ status: 503, isLocalFailure: false });
+  });
+
   it('refreshes models and retries selectChannel on the first attempt when no channel is available', async () => {
     const selected = { channel: { id: 11 } };
     selectChannelMock

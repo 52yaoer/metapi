@@ -25,6 +25,7 @@ import {
   selectProxyChannelForAttempt,
 } from '../../proxy-core/channelSelection.js';
 import { runWithSiteApiEndpointPool, SiteApiEndpointRequestError } from '../../services/siteApiEndpointService.js';
+import { getSurfaceRequestFailure } from '../../proxy-core/surfaces/sharedSurface.js';
 
 function rewriteVideoResponsePublicId(payload: unknown, publicId: string): unknown {
   if (!payload || typeof payload !== 'object') return payload;
@@ -124,7 +125,7 @@ export async function videosProxyRoute(app: FastifyInstance) {
             upstream: response,
             text: responseText,
           };
-        });
+        }, { allowCooldownRecovery: true });
 
         let data: any = {};
         try { data = JSON.parse(text); } catch { data = {}; }
@@ -165,13 +166,16 @@ export async function videosProxyRoute(app: FastifyInstance) {
         recordDownstreamCostUsage(request, estimatedCost);
         return reply.code(upstream.status).send(rewriteVideoResponsePublicId(data, mapping.publicId));
       } catch (error: any) {
+        const { isLocalFailure } = getSurfaceRequestFailure(error);
         const status = error instanceof SiteApiEndpointRequestError ? (error.status || 0) : 0;
         const errorText = error?.message || 'network failure';
-        await recordTokenRouterEventBestEffort('record channel failure', () => tokenRouter.recordFailure(selected.channel.id, {
-          status,
-          errorText,
-          modelName: upstreamModel,
-        }));
+        if (!isLocalFailure) {
+          await recordTokenRouterEventBestEffort('record channel failure', () => tokenRouter.recordFailure(selected.channel.id, {
+            status,
+            errorText,
+            modelName: upstreamModel,
+          }));
+        }
         if (status > 0 && isTokenExpiredError({ status, message: errorText })) {
           await reportTokenExpired({
             accountId: selected.account.id,
@@ -191,7 +195,7 @@ export async function videosProxyRoute(app: FastifyInstance) {
         return reply.code(status || 502).send({
           error: {
             message: status > 0 ? errorText : `Upstream error: ${errorText}`,
-            type: 'upstream_error',
+            type: isLocalFailure ? 'server_error' : 'upstream_error',
           },
         });
       }
@@ -287,7 +291,7 @@ async function requestMappedVideoTaskUpstream(
 
   const site = await resolveProxyVideoTaskSite(mapping.accountId);
   if (site) {
-    return runWithSiteApiEndpointPool(site, (target) => buildRequest(target.baseUrl));
+    return runWithSiteApiEndpointPool(site, (target) => buildRequest(target.baseUrl), { allowCooldownRecovery: true });
   }
 
   return buildRequest(mapping.siteUrl);
@@ -302,6 +306,10 @@ function sendVideoTaskEndpointFailure(
   reply: FastifyReply,
   error: { status?: number | null; rawErrText?: string | null; message?: string | null },
 ) {
+  const failure = getSurfaceRequestFailure(error);
+  if (failure.isLocalFailure) {
+    return reply.code(failure.status).send({ error: { message: failure.message, type: 'server_error' } });
+  }
   const status = typeof error.status === 'number' && error.status > 0 ? error.status : 502;
   const rawText = (typeof error.rawErrText === 'string' && error.rawErrText.trim())
     ? error.rawErrText

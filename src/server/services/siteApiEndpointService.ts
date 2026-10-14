@@ -20,9 +20,11 @@ const NETWORK_FAILURE_PATTERNS = [
 ];
 
 export const SITE_API_ENDPOINT_COOLDOWN_MS = 5 * 60 * 1000;
+export const SITE_API_ENDPOINT_RECOVERY_GRACE_MS = 30 * 1000;
 
 type SiteRow = typeof schema.sites.$inferSelect;
 type SiteApiEndpointRow = typeof schema.siteApiEndpoints.$inferSelect;
+const siteApiEndpointRecoveryLocks = new Set<number>();
 
 export interface SiteApiEndpointTarget {
   kind: 'site-fallback' | 'endpoint';
@@ -54,6 +56,7 @@ export class SiteApiEndpointRequestError extends Error {
   readonly rawErrText: string | null;
   readonly firstByteLatencyMs: number | null;
   readonly siteConcurrencyTimeout: boolean;
+  readonly siteApiEndpointUnavailable: boolean;
   readonly siteApiEndpointUpstreamFailure: boolean;
 
   constructor(message: string, options?: {
@@ -61,6 +64,7 @@ export class SiteApiEndpointRequestError extends Error {
     rawErrText?: string | null;
     firstByteLatencyMs?: number | null;
     siteConcurrencyTimeout?: boolean;
+    siteApiEndpointUnavailable?: boolean;
     upstreamResponse?: boolean;
     cause?: unknown;
   }) {
@@ -74,6 +78,7 @@ export class SiteApiEndpointRequestError extends Error {
       ? options.firstByteLatencyMs
       : null;
     this.siteConcurrencyTimeout = options?.siteConcurrencyTimeout === true;
+    this.siteApiEndpointUnavailable = options?.siteApiEndpointUnavailable === true;
     this.siteApiEndpointUpstreamFailure = options?.upstreamResponse === true;
   }
 }
@@ -215,6 +220,15 @@ function isEndpointCoolingDown(endpoint: SiteApiEndpointRow, nowIso: string): bo
   return !!endpoint.cooldownUntil && endpoint.cooldownUntil > nowIso;
 }
 
+function canProbeCoolingEndpoint(endpoint: SiteApiEndpointRow, nowIso: string): boolean {
+  if (!isEndpointCoolingDown(endpoint, nowIso) || !endpoint.lastFailedAt) return false;
+  const failedAtMs = Date.parse(endpoint.lastFailedAt);
+  const nowMs = Date.parse(nowIso);
+  return Number.isFinite(failedAtMs)
+    && Number.isFinite(nowMs)
+    && nowMs - failedAtMs >= SITE_API_ENDPOINT_RECOVERY_GRACE_MS;
+}
+
 function extractFailureMessage(input: SiteApiEndpointFailureInput): string {
   const direct = typeof input.message === 'string' ? input.message.trim() : '';
   if (direct) return direct;
@@ -255,6 +269,11 @@ export function classifySiteApiEndpointFailure(
     : parseStatusFromFailureMessage(message);
   const failureReason = formatFailureReason(status, message);
 
+  if (input.error instanceof SiteApiEndpointRequestError
+    && (input.error.siteConcurrencyTimeout || input.error.siteApiEndpointUnavailable)) {
+    return { retryable: false, rotateToNextEndpoint: false, failureReason };
+  }
+
   if (isProxyRequestFailure(status, message)) {
     return { retryable: false, rotateToNextEndpoint: false, failureReason };
   }
@@ -282,7 +301,7 @@ export function classifySiteApiEndpointFailure(
 export async function selectSiteApiEndpointTarget(
   site: SiteRow,
   now?: string | Date,
-  options?: { excludedEndpointIds?: ReadonlySet<number> },
+  options?: { excludedEndpointIds?: ReadonlySet<number>; allowCooldownRecovery?: boolean },
 ): Promise<SiteApiEndpointTarget | null> {
   const nowIso = toIsoTimestamp(now);
   const excludedEndpointIds = options?.excludedEndpointIds;
@@ -316,7 +335,24 @@ export async function selectSiteApiEndpointTarget(
       return (left.id ?? 0) - (right.id ?? 0);
     });
 
-  const selected = eligible[0];
+  let selected = eligible[0];
+  const hasReadyEndpoint = endpoints.some((endpoint) => (
+    (endpoint.enabled ?? true) && !isEndpointCoolingDown(endpoint, nowIso)
+  ));
+  if (!selected && options?.allowCooldownRecovery && !hasReadyEndpoint) {
+    selected = endpoints
+      .filter((endpoint) => (
+        (endpoint.enabled ?? true)
+        && !excludedEndpointIds?.has(endpoint.id)
+        && canProbeCoolingEndpoint(endpoint, nowIso)
+      ))
+      .sort((left, right) => {
+        const leftFailedAt = Date.parse(left.lastFailedAt || '');
+        const rightFailedAt = Date.parse(right.lastFailedAt || '');
+        if (leftFailedAt !== rightFailedAt) return leftFailedAt - rightFailedAt;
+        return (left.id ?? 0) - (right.id ?? 0);
+      })[0];
+  }
   if (!selected) return null;
 
   return {
@@ -343,7 +379,25 @@ export async function requireSiteApiBaseUrl(
 ): Promise<string> {
   const baseUrl = await resolveSiteApiBaseUrl(site, now);
   if (baseUrl) return baseUrl;
-  throw new Error('当前站点的 API 请求地址均不可用');
+  throw await buildSiteApiEndpointUnavailableError(site.id);
+}
+
+async function buildSiteApiEndpointUnavailableError(
+  siteId: number,
+  recoveryInProgress = siteApiEndpointRecoveryLocks.has(siteId),
+): Promise<SiteApiEndpointRequestError> {
+  let reason = '恢复请求进行中，请稍后重试';
+  if (!recoveryInProgress) {
+    const endpoints = await db.select({ enabled: schema.siteApiEndpoints.enabled })
+      .from(schema.siteApiEndpoints).where(eq(schema.siteApiEndpoints.siteId, siteId)).all();
+    reason = endpoints.some((endpoint) => endpoint.enabled ?? true)
+      ? '启用地址处于冷却中，请稍后重试'
+      : '所有 API 请求地址已禁用';
+  }
+  return new SiteApiEndpointRequestError(`当前站点的 API 请求地址均不可用：${reason}`, {
+    status: 503,
+    siteApiEndpointUnavailable: true,
+  });
 }
 
 export async function recordSiteApiEndpointFailure(
@@ -386,6 +440,7 @@ export async function recordSiteApiEndpointSuccess(
 export async function runWithSiteApiEndpointPool<T>(
   site: SiteRow,
   operation: (target: SiteApiEndpointTarget) => Promise<T>,
+  options?: { allowCooldownRecovery?: boolean },
 ): Promise<T> {
   const leaseResult = await proxyChannelCoordinator.acquireSiteLease({
     siteId: site.id,
@@ -399,21 +454,36 @@ export async function runWithSiteApiEndpointPool<T>(
   }
   const siteLease = leaseResult.lease;
   let leaseHeldByResult = false;
+  let recoveryLockAcquired = false;
   const attemptedEndpointIds = new Set<number>();
   let lastError: unknown;
 
   try {
     while (true) {
-      const target = await selectSiteApiEndpointTarget(site, undefined, {
+      let target = await selectSiteApiEndpointTarget(site, undefined, {
         excludedEndpointIds: attemptedEndpointIds,
       });
       if (!target) {
-        if (lastError) throw lastError;
-        throw new Error('当前站点的 API 请求地址均不可用');
-      }
-      if (target.endpointId && attemptedEndpointIds.has(target.endpointId)) {
-        if (lastError) throw lastError;
-        throw new Error('当前站点的 API 请求地址均不可用');
+        if (!options?.allowCooldownRecovery) {
+          if (lastError) throw lastError;
+          throw await buildSiteApiEndpointUnavailableError(site.id);
+        }
+        if (!recoveryLockAcquired && siteApiEndpointRecoveryLocks.has(site.id)) {
+          if (lastError) throw lastError;
+          throw await buildSiteApiEndpointUnavailableError(site.id);
+        }
+        if (!recoveryLockAcquired) {
+          siteApiEndpointRecoveryLocks.add(site.id);
+          recoveryLockAcquired = true;
+        }
+        target = await selectSiteApiEndpointTarget(site, undefined, {
+          excludedEndpointIds: attemptedEndpointIds,
+          allowCooldownRecovery: true,
+        });
+        if (!target) {
+          if (lastError) throw lastError;
+          throw await buildSiteApiEndpointUnavailableError(site.id, false);
+        }
       }
 
       try {
@@ -447,6 +517,7 @@ export async function runWithSiteApiEndpointPool<T>(
       }
     }
   } finally {
+    if (recoveryLockAcquired) siteApiEndpointRecoveryLocks.delete(site.id);
     if (!leaseHeldByResult) siteLease.release();
   }
 }

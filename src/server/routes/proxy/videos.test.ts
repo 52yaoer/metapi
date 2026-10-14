@@ -52,7 +52,8 @@ vi.mock('../../services/modelPricingService.js', () => ({
   estimateProxyCost: (arg: any) => estimateProxyCostMock(arg),
 }));
 
-vi.mock('../../services/proxyRetryPolicy.js', () => ({
+vi.mock('../../services/proxyRetryPolicy.js', async () => ({
+  ...await vi.importActual<typeof import('../../services/proxyRetryPolicy.js')>('../../services/proxyRetryPolicy.js'),
   shouldAbortSameSiteEndpointFallback: () => false,
   shouldRetryProxyRequest: (...args: unknown[]) => shouldRetryProxyRequestMock(...args),
   RETRYABLE_TIMEOUT_PATTERNS: [/(request timed out|connection timed out|read timeout|\btimed out\b)/i],
@@ -71,6 +72,7 @@ vi.mock('../../db/index.js', () => ({
     select: () => ({
       from: () => ({
         where: () => ({
+          all: async () => siteApiEndpointRows,
           orderBy: () => ({
             all: async () => siteApiEndpointRows,
           }),
@@ -386,6 +388,20 @@ describe('/v1/videos routes', () => {
     expect(response.statusCode).toBe(200);
     const [targetUrl] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(targetUrl).toBe('https://api-fallback.example.com/v1/videos/vid_upstream_fallback');
+  });
+
+  it.each(['GET', 'DELETE'] as const)('returns JSON local 503 for mapped %s tasks when all addresses are disabled', async (method) => {
+    siteApiEndpointRows = [{ id: 91, siteId: 44, url: 'https://api-videos.example.com', enabled: false }];
+    resolveProxyVideoTaskSiteMock.mockResolvedValue({ id: 44, url: 'https://panel.example.com', platform: 'openai' });
+    getProxyVideoTaskByPublicIdMock.mockResolvedValue({
+      publicId: 'vid_local_disabled', upstreamVideoId: 'vid_upstream_disabled',
+      siteUrl: 'https://api-videos.example.com', tokenValue: 'test-token', accountId: 33,
+    });
+    const response = await app.inject({ method, url: '/v1/videos/vid_local_disabled' });
+    expect(response.statusCode).toBe(503);
+    expect(response.json().error).toMatchObject({ message: expect.stringContaining('已禁用'), type: 'server_error' });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(recordFailureMock).not.toHaveBeenCalled();
   });
 
   it('preserves retryable upstream failures after mapped GET retries exhaust', async () => {

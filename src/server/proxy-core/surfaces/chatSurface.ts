@@ -723,7 +723,7 @@ export async function handleChatSurfaceRequest(
           throw upstreamFailure;
         }
         return result;
-      });
+      }, { allowCooldownRecovery: true });
 
       const upstream = endpointResult.upstream;
       const successfulUpstreamPath = endpointResult.upstreamPath;
@@ -1224,8 +1224,8 @@ export async function handleChatSurfaceRequest(
         selected,
       });
       const endpointFailureStatus = typeof err?.status === 'number' ? err.status : null;
-      if (err?.siteConcurrencyTimeout === true) {
-        const failure = getSurfaceRequestFailure(err);
+      const failure = getSurfaceRequestFailure(err);
+      if (failure.isLocalFailure) {
         await failureToolkit.log({
           selected,
           modelRequested: requestedModel,
@@ -1654,7 +1654,7 @@ export async function handleClaudeCountTokensSurfaceRequest(
           payload,
           latency,
         };
-      });
+      }, { allowCooldownRecovery: true });
 
       const {
         upstream,
@@ -1693,8 +1693,8 @@ export async function handleClaudeCountTokensSurfaceRequest(
         selected,
       });
       const endpointFailureStatus = typeof error?.status === 'number' ? error.status : null;
-      if (error?.siteConcurrencyTimeout === true) {
-        const failure = getSurfaceRequestFailure(error);
+      const failure = getSurfaceRequestFailure(error);
+      if (failure.isLocalFailure) {
         await failureToolkit.log({
           selected,
           modelRequested: requestedModel,

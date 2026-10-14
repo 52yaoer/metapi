@@ -20,6 +20,7 @@ import { insertProxyLog } from '../../services/proxyLogStore.js';
 import { fetchWithObservedFirstByte, getObservedResponseMeta } from '../../proxy-core/firstByteTimeout.js';
 import { getProxyMaxChannelRetries } from '../../services/proxyChannelRetry.js';
 import { runWithSiteApiEndpointPool, SiteApiEndpointRequestError } from '../../services/siteApiEndpointService.js';
+import { getSurfaceRequestFailure } from '../../proxy-core/surfaces/sharedSurface.js';
 import {
   buildForcedChannelUnavailableMessage,
   canRetryChannelSelection,
@@ -121,7 +122,7 @@ export async function embeddingsProxyRoute(app: FastifyInstance) {
             text: responseText,
             firstByteLatencyMs: observedFirstByteLatencyMs,
           };
-        });
+        }, { allowCooldownRecovery: true });
 
         let data: any = {};
         try { data = JSON.parse(text); } catch { data = {}; }
@@ -161,14 +162,17 @@ export async function embeddingsProxyRoute(app: FastifyInstance) {
         );
         return reply.code(upstream.status).send(data);
       } catch (err: any) {
+        const { isLocalFailure } = getSurfaceRequestFailure(err);
         const status = err instanceof SiteApiEndpointRequestError ? (err.status || 0) : 0;
         const errorText = err?.message || 'network failure';
         const firstByteLatencyMs = err instanceof SiteApiEndpointRequestError ? err.firstByteLatencyMs : null;
-        await recordTokenRouterEventBestEffort('record channel failure', () => tokenRouter.recordFailure(selected.channel.id, {
-          status,
-          errorText,
-          modelName: upstreamModel,
-        }));
+        if (!isLocalFailure) {
+          await recordTokenRouterEventBestEffort('record channel failure', () => tokenRouter.recordFailure(selected.channel.id, {
+            status,
+            errorText,
+            modelName: upstreamModel,
+          }));
+        }
         logProxy(
           selected,
           requestedModel,
@@ -208,7 +212,7 @@ export async function embeddingsProxyRoute(app: FastifyInstance) {
         return reply.code(status || 502).send({
           error: {
             message: status > 0 ? errorText : `Upstream error: ${errorText}`,
-            type: 'upstream_error',
+            type: isLocalFailure ? 'server_error' : 'upstream_error',
           },
         });
       }
